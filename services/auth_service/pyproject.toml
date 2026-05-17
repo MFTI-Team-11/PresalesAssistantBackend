@@ -1,0 +1,36 @@
+[tool.poetry]
+name = "auth-service"
+version = "0.1.0"
+description = "Authentication microservice for Presales Assistant"
+authors = ["Design Workshop Team"]
+packages = [
+  { include = "app" },
+  { include = "shared", from = "../.." }
+]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.111.0"
+uvicorn = { extras = ["standard"], version = "^0.30.1" }
+sqlalchemy = "^2.0.30"
+asyncpg = "^0.29.0"
+pydantic = "^2.7.4"
+pydantic-settings = "^2.3.4"
+email-validator = "^2.1.1"
+python-multipart = "^0.0.9"
+passlib = { extras = ["bcrypt"], version = "^1.7.4" }
+bcrypt = "4.0.1"
+pyjwt = "^2.8.0"
+alembic = "^1.13.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2.2"
+ruff = "^0.4.8"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
