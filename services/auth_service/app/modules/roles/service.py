@@ -24,6 +24,10 @@ class RoleService:
         result = await self.session.execute(select(Role).where(Role.code == code.upper()))
         return result.scalar_one_or_none()
 
+    async def get_by_id(self, role_id: UUID) -> Role | None:
+        result = await self.session.execute(select(Role).where(Role.id == role_id))
+        return result.scalar_one_or_none()
+
     async def create(self, data: RoleCreate) -> Role:
         if await self.get_by_code(data.code):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Role already exists")
@@ -37,9 +41,9 @@ class RoleService:
         result = await self.session.execute(select(Role).order_by(Role.code))
         return list(result.scalars().all())
 
-    async def assign_role(self, user_id: UUID, role_code: str):
+    async def assign_role(self, user_id: UUID, role_id: UUID):
         user = await UserService(self.session).get_by_id(user_id)
-        role = await self.get_by_code(role_code)
+        role = await self.get_by_id(role_id)
         if not user or not role:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User or role not found")
         if role not in user.roles:

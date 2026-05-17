@@ -25,11 +25,11 @@ async def create_role(data: RoleCreate, session: Annotated[AsyncSession, Depends
     return success_response(RoleRead.model_validate(role).model_dump(mode="json"))
 
 
-@router.post("/{role_code}/users/{user_id}")
+@router.post("/{role_id}/users/{user_id}")
 async def assign_role(
-    role_code: str,
+    role_id: UUID,
     user_id: UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
 ):
-    user = await RoleService(session).assign_role(user_id, role_code)
+    user = await RoleService(session).assign_role(user_id, role_id)
     return success_response(serialize_user(user))
