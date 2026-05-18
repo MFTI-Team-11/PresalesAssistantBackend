@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
+from app.modules.auth.dependencies import require_roles
 from app.modules.roles.schemas import RoleCreate, RoleRead
 from app.modules.roles.service import RoleService
+from app.modules.users.models import User
 from app.modules.users.routes import serialize_user
 from shared.responses import success_response
 
@@ -29,6 +31,7 @@ async def create_role(data: RoleCreate, session: Annotated[AsyncSession, Depends
 async def assign_role(
     role_id: UUID,
     user_id: UUID,
+    current_user: Annotated[User, Depends(require_roles(["SUPERADMIN", "MANAGER"]))],
     session: Annotated[AsyncSession, Depends(get_session)],
 ):
     user = await RoleService(session).assign_role(user_id, role_id)

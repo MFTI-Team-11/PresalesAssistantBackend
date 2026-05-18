@@ -1,7 +1,7 @@
 """add auth session refresh token
 
-Revision ID: 0003_auth_session_refresh_token
-Revises: 0002_auth_session_device_metadata
+Revision ID: 0003_session_refresh
+Revises: 0002_session_device_meta
 Create Date: 2026-05-17 00:00:00.000000
 """
 
@@ -10,8 +10,8 @@ from collections.abc import Sequence
 from alembic import op
 import sqlalchemy as sa
 
-revision: str = "0003_auth_session_refresh_token"
-down_revision: str | None = "0002_auth_session_device_metadata"
+revision: str = "0003_session_refresh"
+down_revision: str | None = "0002_session_device_meta"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

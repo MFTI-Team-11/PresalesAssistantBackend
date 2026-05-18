@@ -43,3 +43,18 @@ async def get_current_user(
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive user")
     return user
+
+
+def require_roles(allowed_roles: list[str]):
+    allowed = {role.upper() for role in allowed_roles}
+
+    async def dependency(current_user: Annotated[User, Depends(get_current_user)]) -> User:
+        user_roles = {role.code.upper() for role in current_user.roles}
+        if user_roles.isdisjoint(allowed):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Required roles: {', '.join(sorted(allowed))}",
+            )
+        return current_user
+
+    return dependency

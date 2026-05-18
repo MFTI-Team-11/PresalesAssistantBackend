@@ -1,6 +1,6 @@
 """add auth session device metadata
 
-Revision ID: 0002_auth_session_device_metadata
+Revision ID: 0002_session_device_meta
 Revises: 0001_initial_auth
 Create Date: 2026-05-17 00:00:00.000000
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0002_auth_session_device_metadata"
+revision: str = "0002_session_device_meta"
 down_revision: str | None = "0001_initial_auth"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
