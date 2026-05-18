@@ -1,4 +1,4 @@
-import json
+﻿import json
 import re
 
 from fastapi import HTTPException, status
@@ -26,6 +26,78 @@ DEFAULT_PREANALYSIS_QUESTIONS = [
     "Какая схема технической поддержки нужна после завершения проекта?",
     "Нужно ли включать годовое гарантийное обслуживание в бюджет проекта?",
     "Какие ключевые риски, ограничения и допущения уже известны?",
+]
+
+DEFAULT_PREANALYSIS_QUESTION_META = [
+    {
+        "id": "business_goal",
+        "category": "business",
+        "placeholder": "Например: ускорить пресейл, снизить ручной труд, повысить точность оценки",
+    },
+    {
+        "id": "users_and_scenarios",
+        "category": "scope",
+        "placeholder": "Опишите роли пользователей и основные сценарии работы",
+    },
+    {
+        "id": "input_documents",
+        "category": "data",
+        "allow_file": True,
+        "file_hint": "Можно приложить ТЗ, письмо заказчика или документ с требованиями",
+        "placeholder": "Если файла нет, опишите входные документы текстом",
+    },
+    {
+        "id": "desired_outputs",
+        "category": "result",
+        "placeholder": "Например: архитектура, бюджет, сайзинг, риски, ФТ/НФТ",
+    },
+    {
+        "id": "integrations",
+        "category": "integrations",
+        "placeholder": "Укажите системы, API, протоколы, форматы обмена",
+    },
+    {
+        "id": "deployment_constraints",
+        "category": "infrastructure",
+        "placeholder": "Например: on-premise, закрытый контур, запрет внешних облаков",
+    },
+    {
+        "id": "security_requirements",
+        "category": "security",
+        "placeholder": "Опишите роли, аудит, персональные данные, требования ИБ",
+    },
+    {
+        "id": "load",
+        "category": "sizing",
+        "placeholder": "Пользователи, запросы, пресейлы в месяц, объем файлов и данных",
+    },
+    {
+        "id": "timeline_budget_priorities",
+        "category": "planning",
+        "placeholder": "Сроки, бюджетные ограничения, приоритеты MVP/этапов",
+    },
+    {
+        "id": "rates_and_roles",
+        "category": "budget",
+        "allow_file": True,
+        "file_hint": "Можно приложить изображение с данными о сотрудниках или таблицу ставок",
+        "placeholder": "Например: бэкендер 1000р/час, архитектор 2000р/час",
+    },
+    {
+        "id": "support_scheme",
+        "category": "support",
+        "placeholder": "Например: 24/7 1-3 линии или только 3 линия в рабочее время",
+    },
+    {
+        "id": "warranty",
+        "category": "support",
+        "placeholder": "Да/нет, срок гарантии, процент или бюджетный лимит",
+    },
+    {
+        "id": "known_risks",
+        "category": "risks",
+        "placeholder": "Опишите известные ограничения, зависимости, риски и допущения",
+    },
 ]
 
 DEFAULT_RATES = {
@@ -68,46 +140,13 @@ QUESTIONS_SYSTEM_PROMPT = f"""
 {{"questions": ["Вопрос 1", "Вопрос 2"]}}
 """
 
-ANALYSIS_SYSTEM_PROMPT = f"""
-Ты senior пресейл-аналитик, архитектор и менеджер оценки IT-проектов.
-Работай строго по описанию кейса.
-{CASE_6_CONTEXT}
-
-На основе требований и ответов пользователя подготовь структурированный результат пресейла.
-Если данных не хватает, делай явные допущения внутри соответствующих полей.
-Часы указывай числами. В tasks каждый элемент обязан содержать name и estimates.
-estimates - список объектов {{"role": "...", "hours": число}}.
-Это поле используется для расчета бюджета.
-Верни только валидный JSON без markdown по схеме:
-{{
-  "functional_requirements": [
-    {{"code": "FR-001", "title": "...", "priority": "must|should|could"}}
-  ],
-  "nonfunctional_requirements": [{{"code": "NFR-001", "title": "...", "description": "..."}}],
-  "tasks": [
-    {{"name": "...", "description": "...", "estimates": [
-      {{"role": "Analyst", "hours": 40}}
-    ]}}
-  ],
-  "architecture_options": [
-    {{"name": "...", "recommended": true, "description": "...", "tradeoffs": ["..."]}}
-  ],
-  "sizing": {{
-    "summary": "...",
-    "components": [{{"name": "...", "cpu": 2, "ram_gb": 4, "storage_gb": 50}}]
-  }},
-  "team_options": [{{"name": "...", "duration_months": 6, "roles": ["Analyst middle"]}}],
-  "risks": [{{"risk": "...", "impact": "low|medium|high", "mitigation": "..."}}]
-}}
-"""
-
 PRESALE_ESTIMATE_SYSTEM_PROMPT = f"""
 Ты AI ассистент для пресейла, системный аналитик, архитектор и оценщик проекта.
 Работай по Кейс 6.
 {CASE_6_CONTEXT}
 
 Пользователь передает один свободный текст и может приложить файлы: требования,
-скриншоты, фото таблиц со ставками, документы, картинки из Figma. Самостоятельно
+изображение с данными о сотрудниках, фото таблиц со ставками, документы. Самостоятельно
 извлеки из текста и файлов:
 1. требования заказчика;
 2. ответы пользователя на вопросы преданализа;
@@ -181,40 +220,40 @@ class AiService:
     def default_questions(self) -> list[str]:
         return DEFAULT_PREANALYSIS_QUESTIONS
 
-    def questions_text(self) -> str:
-        return self.format_questions_text(self.default_questions())
+    def default_question_items(self) -> list[dict]:
+        return [
+            {
+                "id": meta["id"],
+                "text": question,
+                "category": meta["category"],
+                "required": True,
+                "answer_type": "text",
+                "allow_file": bool(meta.get("allow_file", False)),
+                "file_required": bool(meta.get("file_required", False)),
+                "file_hint": meta.get("file_hint"),
+                "placeholder": meta.get("placeholder"),
+            }
+            for question, meta in zip(
+                DEFAULT_PREANALYSIS_QUESTIONS,
+                DEFAULT_PREANALYSIS_QUESTION_META,
+                strict=True,
+            )
+        ]
 
-    def format_questions_text(self, questions: list[str]) -> str:
-        if not questions:
-            return "Уточняющих вопросов нет."
-        lines = ["Ответьте, пожалуйста, на вопросы для преданализа:"]
-        lines.extend(f"{index}. {question}" for index, question in enumerate(questions, start=1))
+    def format_ordered_answers(self, answers: list[str]) -> str:
+        lines = ["Ответы пользователя на вопросы преданализа:"]
+        for index, question in enumerate(self.default_question_items()):
+            answer = answers[index].strip() if index < len(answers) and answers[index] else ""
+            lines.append(f"{index + 1}. {question['text']}")
+            lines.append(f"Ответ: {answer or 'Не заполнено'}")
         return "\n".join(lines)
-
-    async def analysis(self, text: str, answers: list[str], desired_outputs: list[str]) -> dict:
-        user_payload = {
-            "requirements_text": text or "Нет данных",
-            "preanalysis_answers": answers,
-            "desired_outputs": desired_outputs,
-        }
-        content = await self.client.chat_json(
-            [
-                {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
-                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-            ],
-            temperature=0.2,
-        )
-        payload = self._parse_json(content)
-        try:
-            return AnalysisResponse.model_validate(payload).model_dump()
-        except ValidationError as exc:
-            raise self._bad_ai_response("GigaChat returned invalid analysis JSON", exc)
 
     async def presale_estimate(
         self,
-        input_text: str,
-        attachments: list[str],
+        answers: list[str],
+        attachment_groups: list[list[str]],
     ) -> dict:
+        input_text = self.format_ordered_answers(answers)
         content = await self.client.chat_json(
             [
                 {"role": "system", "content": PRESALE_ESTIMATE_SYSTEM_PROMPT},
@@ -228,7 +267,7 @@ class AiService:
                 },
             ],
             temperature=0.2,
-            attachments=attachments,
+            attachment_groups=attachment_groups,
             function_call_auto=True,
         )
         payload = self._parse_json(content)

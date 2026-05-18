@@ -49,11 +49,14 @@ class GigaChatClient:
         messages: list[dict],
         temperature: float = 0.2,
         attachments: list[str] | None = None,
+        attachment_groups: list[list[str]] | None = None,
         function_call_auto: bool = False,
     ) -> str:
         token = await self._get_access_token()
         prepared_messages = [dict(message) for message in messages]
-        if attachments:
+        if attachment_groups:
+            self._attach_grouped_files(prepared_messages, attachment_groups)
+        elif attachments:
             for message in reversed(prepared_messages):
                 if message.get("role") == "user":
                     message["attachments"] = attachments
@@ -87,6 +90,27 @@ class GigaChatClient:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="GigaChat returned an unexpected completion response",
             ) from exc
+
+    def _attach_grouped_files(
+        self,
+        messages: list[dict],
+        attachment_groups: list[list[str]],
+    ) -> None:
+        groups = [group for group in attachment_groups if group]
+        if not groups:
+            return
+        for message in reversed(messages):
+            if message.get("role") == "user":
+                message["attachments"] = groups[0]
+                break
+        for index, group in enumerate(groups[1:], start=2):
+            messages.append(
+                {
+                    "role": "user",
+                    "content": f"Дополнительное вложение {index}. Учитывай его при анализе.",
+                    "attachments": group,
+                }
+            )
 
     async def _get_access_token(self) -> str:
         if self._access_token and time.time() < self._expires_at - 60:

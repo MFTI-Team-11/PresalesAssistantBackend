@@ -1,16 +1,16 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+import json
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.models.request_log import AiRequestLog
 from app.schemas import (
-    AnalysisRequest,
-    AnalysisResponse,
+    DefaultQuestionsResponse,
     QuestionsRequest,
     QuestionsResponse,
-    QuestionsTextResponse,
     PresaleEstimateResponse,
 )
 from app.service import AiService
@@ -20,10 +20,11 @@ router = APIRouter()
 ai_service = AiService()
 
 
-async def upload_gigachat_files(files: list[UploadFile] | None) -> tuple[list[str], list[dict]]:
+async def upload_gigachat_files(files: list[UploadFile] | None) -> tuple[list[list[str]], list[dict]]:
     if not files:
         return [], []
-    attachments: list[str] = []
+    document_group: list[str] = []
+    attachment_groups: list[list[str]] = []
     source_documents: list[dict] = []
     for file in files:
         raw = await file.read()
@@ -33,18 +34,24 @@ async def upload_gigachat_files(files: list[UploadFile] | None) -> tuple[list[st
             content_type=file.content_type,
         )
         file_id = uploaded.get("id")
+        modalities = uploaded.get("modalities", [])
         if file_id:
-            attachments.append(file_id)
+            if "image" in modalities:
+                attachment_groups.append([file_id])
+            else:
+                document_group.append(file_id)
         source_documents.append(
             {
                 "filename": file.filename,
                 "content_type": file.content_type,
                 "bytes": len(raw),
                 "gigachat_file_id": file_id,
-                "modalities": uploaded.get("modalities", []),
+                "modalities": modalities,
             }
         )
-    return attachments, source_documents
+    if document_group:
+        attachment_groups.insert(0, document_group)
+    return attachment_groups, source_documents
 
 
 @router.post("/questions")
@@ -68,7 +75,7 @@ async def generate_questions(
 async def get_default_questions(
     session: Annotated[AsyncSession, Depends(get_session)],
 ):
-    response = QuestionsResponse(questions=ai_service.default_questions())
+    response = DefaultQuestionsResponse(questions=ai_service.default_question_items())
     session.add(
         AiRequestLog(
             operation="questions_default",
@@ -80,50 +87,34 @@ async def get_default_questions(
     return success_response(response.model_dump())
 
 
-@router.get("/questions/text")
-async def generate_questions_text(
-    session: Annotated[AsyncSession, Depends(get_session)],
-):
-    response = QuestionsTextResponse(text=ai_service.questions_text())
-    session.add(
-        AiRequestLog(
-            operation="questions_text",
-            request_payload={},
-            response_payload=response.model_dump(),
-        )
-    )
-    await session.commit()
-    return success_response(response.model_dump())
-
-
 @router.post("/presale/estimate")
 async def generate_presale_estimate(
     session: Annotated[AsyncSession, Depends(get_session)],
-    input_text: Annotated[
+    answers: Annotated[
         str,
         Form(
             description=(
-                "Свободный текст пользователя: ответы на вопросы, требования, "
-                "ставки вроде 'бэкендер 1000р/час, архитектор 2000р/час'"
+                "JSON-массив строк с ответами по порядку вопросов из /questions/default"
             )
         ),
     ],
     files: Annotated[
         list[UploadFile] | None,
-        File(description="Файлы, фото, скриншоты, документы с требованиями или ставками"),
+        File(description="Файлы, фото, документы и изображения с требованиями или ставками"),
     ] = None,
 ):
-    attachments, source_documents = await upload_gigachat_files(files)
+    parsed_answers = parse_answers(answers)
+    attachment_groups, source_documents = await upload_gigachat_files(files)
     estimate = await ai_service.presale_estimate(
-        input_text=input_text,
-        attachments=attachments,
+        answers=parsed_answers,
+        attachment_groups=attachment_groups,
     )
     response = PresaleEstimateResponse(**estimate, source_documents=source_documents)
     session.add(
         AiRequestLog(
             operation="presale_estimate",
             request_payload={
-                "input_text": input_text,
+                "answers": parsed_answers,
                 "source_documents": source_documents,
             },
             response_payload=response.model_dump(),
@@ -133,19 +124,17 @@ async def generate_presale_estimate(
     return success_response(response.model_dump())
 
 
-@router.post("/analysis")
-async def generate_analysis(
-    data: AnalysisRequest,
-    session: Annotated[AsyncSession, Depends(get_session)],
-):
-    analysis = await ai_service.analysis(data.text, data.answers, data.desired_outputs)
-    response = AnalysisResponse(**analysis)
-    session.add(
-        AiRequestLog(
-            operation="analysis",
-            request_payload=data.model_dump(),
-            response_payload=response.model_dump(),
+def parse_answers(raw: str) -> list[str]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="answers must be a valid JSON array",
+        ) from exc
+    if not isinstance(value, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="answers must be a JSON array",
         )
-    )
-    await session.commit()
-    return success_response(response.model_dump())
+    return ["" if item is None else str(item) for item in value]

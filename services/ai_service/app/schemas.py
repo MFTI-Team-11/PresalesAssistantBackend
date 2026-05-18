@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class QuestionsRequest(BaseModel):
@@ -9,14 +9,20 @@ class QuestionsResponse(BaseModel):
     questions: list[str]
 
 
-class QuestionsTextResponse(BaseModel):
+class PreanalysisQuestion(BaseModel):
+    id: str
     text: str
+    category: str
+    required: bool = True
+    answer_type: str = "text"
+    allow_file: bool = False
+    file_required: bool = False
+    file_hint: str | None = None
+    placeholder: str | None = None
 
 
-class AnalysisRequest(BaseModel):
-    text: str = ""
-    answers: list[str] = Field(default_factory=list)
-    desired_outputs: list[str] = Field(default_factory=list)
+class DefaultQuestionsResponse(BaseModel):
+    questions: list[PreanalysisQuestion]
 
 
 class AnalysisResponse(BaseModel):
