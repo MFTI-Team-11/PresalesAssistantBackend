@@ -1,4 +1,5 @@
 from uuid import UUID
+from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import delete, select
@@ -6,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.security import CurrentUser
+from app.core.storage import FileStorage
 from app.integrations import AiServiceClient
 from app.models.presale import (
     PreAnalysisQuestion,
@@ -14,11 +16,8 @@ from app.models.presale import (
     PresaleRequest,
     SpecialistRate,
 )
-from app.pricing import PricingService
-from app.reporting import ReportService
 from app.schemas import (
     AnswerInput,
-    GenerateAnalysisRequest,
     PresaleCreate,
     SpecialistRateInput,
 )
@@ -28,8 +27,7 @@ class PresaleService:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.ai = AiServiceClient()
-        self.pricing = PricingService()
-        self.reports = ReportService()
+        self.storage = FileStorage()
 
     async def create(self, data: PresaleCreate, user: CurrentUser) -> PresaleRequest:
         presale = PresaleRequest(owner_id=user.id, **data.model_dump())
@@ -66,19 +64,94 @@ class PresaleService:
         presale = await self.get_owned(presale_id, user)
         raw = await file.read()
         text = raw.decode("utf-8", errors="ignore")
-        if not text.strip():
-            raise HTTPException(status_code=400, detail="Upload a text-like requirements document")
+        object_key = self._storage_key(user, presale, file.filename or "attachment")
+        self.storage.put_file(object_key, raw, file.content_type)
         document = PresaleDocument(
             presale_id=presale.id,
             filename=file.filename or "requirements.txt",
             content_type=file.content_type,
             text_content=text,
+            storage_bucket=self.storage.bucket,
+            storage_object_key=object_key,
+            size_bytes=len(raw),
         )
         presale.status = "requirements_uploaded"
         self.session.add(document)
         await self.session.commit()
         await self.session.refresh(document)
         return document
+
+    async def generate_estimate(
+        self,
+        presale_id: UUID,
+        user: CurrentUser,
+        answers: list[str],
+        files: list[UploadFile],
+    ) -> PresaleAnalysis:
+        presale = await self.get_owned(presale_id, user)
+        questions = await self.ai.default_questions()
+        await self.session.execute(
+            delete(PreAnalysisQuestion).where(PreAnalysisQuestion.presale_id == presale.id)
+        )
+        saved_questions = []
+        for index, question in enumerate(questions):
+            answer = answers[index] if index < len(answers) else ""
+            saved_questions.append(
+                PreAnalysisQuestion(
+                    presale_id=presale.id,
+                    question=question["text"],
+                    answer=answer,
+                )
+            )
+        self.session.add_all(saved_questions)
+
+        ai_files = []
+        for file in files:
+            raw = await file.read()
+            filename = file.filename or "attachment"
+            object_key = self._storage_key(user, presale, filename)
+            self.storage.put_file(object_key, raw, file.content_type)
+            text = raw.decode("utf-8", errors="ignore")
+            self.session.add(
+                PresaleDocument(
+                    presale_id=presale.id,
+                    filename=filename,
+                    content_type=file.content_type,
+                    text_content=text,
+                    storage_bucket=self.storage.bucket,
+                    storage_object_key=object_key,
+                    size_bytes=len(raw),
+                )
+            )
+            ai_files.append(
+                {
+                    "filename": filename,
+                    "content_type": file.content_type,
+                    "content": raw,
+                }
+            )
+
+        payload = await self.ai.generate_presale_estimate(answers, ai_files)
+        if presale.analysis:
+            analysis = presale.analysis
+            analysis.payload = payload
+        else:
+            analysis = PresaleAnalysis(presale_id=presale.id, payload=payload)
+            self.session.add(analysis)
+        presale.status = "analysis_ready"
+        analysis.report_markdown = ""
+        await self.session.commit()
+        await self.session.refresh(analysis)
+        return analysis
+
+    async def history(self, presale_id: UUID, user: CurrentUser) -> dict:
+        presale = await self.get_owned(presale_id, user)
+        return {
+            "presale": presale,
+            "questions": presale.questions,
+            "documents": presale.documents,
+            "analysis": presale.analysis,
+        }
 
     async def replace_rates(self, presale_id: UUID, user: CurrentUser, rates: list[SpecialistRateInput]):
         presale = await self.get_owned(presale_id, user)
@@ -110,41 +183,8 @@ class PresaleService:
         await self.session.commit()
         return list(questions.values())
 
-    async def generate_analysis(self, presale_id: UUID, user: CurrentUser, data: GenerateAnalysisRequest):
-        presale = await self.get_owned(presale_id, user)
-        raw_ai = await self.ai.generate_analysis(
-            {
-                "text": self._combined_text(presale),
-                "answers": [item.answer for item in presale.questions if item.answer],
-                "desired_outputs": presale.desired_outputs,
-            }
-        )
-        rates = self.pricing.normalize_rates(
-            [{"role": item.role, "grade": item.grade, "hourly_rate": float(item.hourly_rate)} for item in presale.rates]
-        )
-        effort_budget = self.pricing.effort_budget(raw_ai["tasks"], rates)
-        warranty_budget = self.pricing.warranty_budget(effort_budget["total_cost"])
-        payload = {
-            **raw_ai,
-            "effort_budget": effort_budget,
-            "support_budget": self.pricing.support_budget(data.support_scheme, rates),
-            "warranty_budget": warranty_budget,
-            "monthly_expenses": self.pricing.monthly_expenses(
-                effort_budget["total_cost"], warranty_budget["annual_cost"], data.project_months
-            ),
-        }
-        if presale.analysis:
-            analysis = presale.analysis
-            analysis.payload = payload
-        else:
-            analysis = PresaleAnalysis(presale_id=presale.id, payload=payload)
-            self.session.add(analysis)
-        presale.status = "analysis_ready"
-        await self.session.flush()
-        analysis.report_markdown = self.reports.render(presale, payload)
-        await self.session.commit()
-        await self.session.refresh(analysis)
-        return analysis
-
     def _combined_text(self, presale: PresaleRequest) -> str:
         return "\n\n".join(document.text_content for document in presale.documents)
+
+    def _storage_key(self, user: CurrentUser, presale: PresaleRequest, filename: str) -> str:
+        return f"{user.id}/{presale.id}/{uuid4().hex}_{filename}"

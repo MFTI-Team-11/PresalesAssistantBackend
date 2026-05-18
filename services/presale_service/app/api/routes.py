@@ -1,7 +1,9 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, UploadFile
+import json
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import CurrentUser, get_current_user
@@ -10,7 +12,7 @@ from app.schemas import (
     AnalysisRead,
     AnswerInput,
     DocumentRead,
-    GenerateAnalysisRequest,
+    EstimateHistoryRead,
     PresaleCreate,
     PresaleRead,
     QuestionRead,
@@ -21,6 +23,22 @@ from app.service import PresaleService
 from shared.responses import success_response
 
 router = APIRouter()
+
+
+def parse_answers(raw: str) -> list[str]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="answers must be a valid JSON array",
+        ) from exc
+    if not isinstance(value, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="answers must be a JSON array",
+        )
+    return ["" if item is None else str(item) for item in value]
 
 
 @router.post("/presales", status_code=201)
@@ -85,12 +103,37 @@ async def save_answers(
     return success_response([QuestionRead.model_validate(item).model_dump(mode="json") for item in items])
 
 
-@router.post("/presales/{presale_id}/analysis/generate")
-async def generate_analysis(
+@router.post("/presales/{presale_id}/estimate")
+async def generate_estimate(
     presale_id: UUID,
-    data: GenerateAnalysisRequest,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    answers: Annotated[
+        str,
+        Form(description="JSON-массив строк с ответами по порядку вопросов из ai_service"),
+    ],
+    files: Annotated[list[UploadFile] | None, File()] = None,
+):
+    obj = await PresaleService(session).generate_estimate(
+        presale_id=presale_id,
+        user=user,
+        answers=parse_answers(answers),
+        files=files or [],
+    )
+    return success_response(AnalysisRead.model_validate(obj).model_dump(mode="json"))
+
+
+@router.get("/presales/{presale_id}/history")
+async def get_history(
+    presale_id: UUID,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ):
-    obj = await PresaleService(session).generate_analysis(presale_id, user, data)
-    return success_response(AnalysisRead.model_validate(obj).model_dump(mode="json"))
+    data = await PresaleService(session).history(presale_id, user)
+    payload = EstimateHistoryRead(
+        presale=PresaleRead.model_validate(data["presale"]),
+        questions=[QuestionRead.model_validate(item) for item in data["questions"]],
+        documents=[DocumentRead.model_validate(item) for item in data["documents"]],
+        analysis=AnalysisRead.model_validate(data["analysis"]) if data["analysis"] else None,
+    )
+    return success_response(payload.model_dump(mode="json"))

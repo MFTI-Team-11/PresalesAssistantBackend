@@ -39,7 +39,10 @@ class PresaleDocument(Base):
     )
     filename: Mapped[str] = mapped_column(String(255))
     content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    text_content: Mapped[str] = mapped_column(Text)
+    text_content: Mapped[str] = mapped_column(Text, default="")
+    storage_bucket: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    storage_object_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     presale = relationship("PresaleRequest", back_populates="documents")

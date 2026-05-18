@@ -27,6 +27,9 @@ class DocumentRead(BaseModel):
     id: UUID
     filename: str
     content_type: str | None
+    storage_bucket: str | None = None
+    storage_object_key: str | None = None
+    size_bytes: int | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -57,14 +60,16 @@ class AnswerInput(BaseModel):
     answer: str = Field(min_length=1)
 
 
-class GenerateAnalysisRequest(BaseModel):
-    support_scheme: str = "three_lines_24x7"
-    project_months: int = Field(default=6, ge=1, le=36)
-
-
 class AnalysisRead(BaseModel):
     id: UUID
     payload: dict
     report_markdown: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class EstimateHistoryRead(BaseModel):
+    presale: PresaleRead
+    questions: list[QuestionRead]
+    documents: list[DocumentRead]
+    analysis: AnalysisRead | None
