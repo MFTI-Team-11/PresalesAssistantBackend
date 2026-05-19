@@ -21,7 +21,7 @@ def anyio_backend() -> str:
 
 @pytest.fixture(scope="session")
 def postgres_url() -> Generator[str, None, None]:
-    with PostgresContainer("postgres:16-alpine", driver="asyncpg") as postgres:
+    with PostgresContainer("postgres:15-alpine", driver="asyncpg") as postgres:
         yield postgres.get_connection_url()
 
 
