@@ -1,7 +1,7 @@
 import asyncpg
 import pytest
 from datetime import datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from httpx import AsyncClient
 
@@ -395,3 +395,46 @@ async def test_refresh_happy_case(client: AsyncClient, asyncpg_url: str) -> None
     assert refreshed_auth_session["token_hash"] != original_auth_session["token_hash"]
     assert refreshed_auth_session["refresh_token_hash"] != original_auth_session["refresh_token_hash"]
     assert refreshed_auth_session["revoked_at"] is None
+
+
+@pytest.mark.anyio
+async def test_logout_happy_case(client: AsyncClient, asyncpg_url: str) -> None:
+    email = "logout@example.com"
+
+    register_response = await client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "full_name": "Logout User",
+            "password": "password123",
+        },
+    )
+
+    assert register_response.status_code == 201
+
+    session_id = register_response.json()["payload"]["session_id"]
+
+    response = await client.post("/auth/logout")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "payload": {},
+    }
+
+    assert client.cookies.get("access_token") is None
+    assert client.cookies.get("refresh_token") is None
+
+    me_response = await client.get("/auth/me")
+
+    assert me_response.status_code == 401
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        auth_session = dict(
+            await conn.fetchrow("SELECT * FROM auth_sessions WHERE id = $1", UUID(session_id))
+        )
+    finally:
+        await conn.close()
+
+    assert auth_session["revoked_at"] is not None
