@@ -246,3 +246,39 @@ async def test_login_happy_case(client: AsyncClient, asyncpg_url: str) -> None:
         "metadata": '{"origin": "https://example.com", "referer": "https://example.com/login", "timezone": "UTC", "accept_language": "en-US"}',
         "revoked_at": None,
     }
+
+
+@pytest.mark.anyio
+async def test_me_happy_case(client: AsyncClient, asyncpg_url: str) -> None:
+    email = "me@example.com"
+
+    register_response = await client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "full_name": "Me User",
+            "password": "password123",
+        },
+    )
+
+    assert register_response.status_code == 201
+
+    response = await client.get("/auth/me")
+
+    assert response.status_code == 200
+
+    body = response.json()
+    payload = body["payload"]
+    user_id = payload.pop("id")
+
+    assert isinstance(user_id, str) and len(user_id) > 0
+
+    assert body == {
+        "success": True,
+        "payload": {
+            "email": email,
+            "full_name": "Me User",
+            "is_active": True,
+            "roles": ["CUSTOMER"],
+        },
+    }
