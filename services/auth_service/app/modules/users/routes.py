@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import require_roles
 from app.modules.users.models import User
 from app.modules.users.schemas import UserRead
 from app.modules.users.service import UserService
@@ -22,7 +22,7 @@ def serialize_user(user) -> dict:
 
 @router.get("")
 async def list_users(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_roles(["SUPERADMIN"]))],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict:
     users = await UserService(session).list_users()
@@ -32,7 +32,7 @@ async def list_users(
 @router.get("/{user_id}")
 async def get_user(
     user_id: UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_roles(["SUPERADMIN"]))],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict:
     user = await UserService(session).get_by_id(user_id)
