@@ -98,3 +98,88 @@ async def test_list_my_sessions_happy_case(client: AsyncClient, asyncpg_url: str
             "revoked_at": None,
         },
     }
+
+
+@pytest.mark.anyio
+async def test_revoke_session_happy_case(client: AsyncClient, asyncpg_url: str) -> None:
+    email = "test@example.com"
+
+    register_response = await client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "full_name": "Test User",
+            "password": "password123",
+        },
+        headers={"user-agent": "pytest-register-session"},
+    )
+
+    assert register_response.status_code == 201
+
+    register_session_id = register_response.json()["payload"]["session_id"]
+
+    login_response = await client.post(
+        "/auth/login",
+        json={
+            "email": email,
+            "password": "password123",
+            "fingerprint": "test-fingerprint",
+        },
+        headers={"user-agent": "pytest-login-session"},
+    )
+
+    assert login_response.status_code == 200
+
+    login_session_id = login_response.json()["payload"]["session_id"]
+
+    response = await client.delete(f"/sessions/{register_session_id}")
+
+    assert response.status_code == 200
+
+    body = response.json()
+    payload = body["payload"]
+    token_jti = payload.pop("token_jti")
+    ip_address = payload.pop("ip_address")
+    expires_at = payload.pop("expires_at")
+    refresh_expires_at = payload.pop("refresh_expires_at")
+    revoked_at = payload.pop("revoked_at")
+    created_at = payload.pop("created_at")
+
+    assert isinstance(token_jti, str) and len(token_jti) > 0
+    assert isinstance(ip_address, str) and len(ip_address) > 0
+    assert isinstance(expires_at, str) and len(expires_at) > 0
+    assert isinstance(refresh_expires_at, str) and len(refresh_expires_at) > 0
+    assert isinstance(revoked_at, str) and len(revoked_at) > 0
+    assert isinstance(created_at, str) and len(created_at) > 0
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        user_id = await conn.fetchval("SELECT id FROM users WHERE email = $1", email)
+        db_sessions = await conn.fetch(
+            "SELECT id, revoked_at FROM auth_sessions WHERE user_id = $1",
+            user_id,
+        )
+    finally:
+        await conn.close()
+
+    db_sessions_by_id = {str(session["id"]): session for session in db_sessions}
+
+    assert db_sessions_by_id.keys() == {register_session_id, login_session_id}
+    assert db_sessions_by_id[register_session_id]["revoked_at"] is not None
+    assert db_sessions_by_id[login_session_id]["revoked_at"] is None
+    assert body == {
+        "success": True,
+        "payload": {
+            "id": register_session_id,
+            "user_id": str(user_id),
+            "fingerprint": None,
+            "user_agent": "pytest-register-session",
+            "session_source": None,
+            "device_type": None,
+            "os_name": None,
+            "os_version": None,
+            "browser_name": None,
+            "browser_version": None,
+            "session_metadata": {},
+        },
+    }
