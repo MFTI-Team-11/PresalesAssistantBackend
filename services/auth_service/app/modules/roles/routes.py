@@ -40,6 +40,17 @@ async def assign_role(
     user_id: UUID,
     current_user: Annotated[User, Depends(require_roles(["SUPERADMIN", "MANAGER"]))],
     session: Annotated[AsyncSession, Depends(get_session)],
-):
+) -> dict:
     user = await RoleService(session).assign_role(user_id, role_id)
+    return success_response(serialize_user(user))
+
+
+@router.delete("/{role_id}/users/{user_id}")
+async def delete_role_from_user(
+    role_id: UUID,
+    user_id: UUID,
+    current_user: Annotated[User, Depends(require_roles(["SUPERADMIN"]))],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict:
+    user = await RoleService(session).delete_role_from_user(user_id, role_id)
     return success_response(serialize_user(user))

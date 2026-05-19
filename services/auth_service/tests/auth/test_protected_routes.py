@@ -15,6 +15,7 @@ async def test_protected_routes_return_401_without_token(client: AsyncClient) ->
         {"method": "GET", "route": "/roles"},
         {"method": "POST", "route": "/roles"},
         {"method": "POST", "route": f"/roles/{uuid4()}/users/{uuid4()}"},
+        {"method": "DELETE", "route": f"/roles/{uuid4()}/users/{uuid4()}"},
         {"method": "GET", "route": "/users"},
         {"method": "GET", "route": f"/users/{uuid4()}"},
         {"method": "PATCH", "route": "/users/me"},
