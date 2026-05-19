@@ -17,12 +17,18 @@ async def test_protected_routes_return_401_without_token(client: AsyncClient) ->
         {"method": "POST", "route": f"/roles/{uuid4()}/users/{uuid4()}"},
         {"method": "GET", "route": "/users"},
         {"method": "GET", "route": f"/users/{uuid4()}"},
+        {"method": "PATCH", "route": "/users/me"},
+        {"method": "PATCH", "route": f"/users/{uuid4()}"},
     ]
 
     for route in protected_routes:
         json = None
         if route == {"method": "POST", "route": "/roles"}:
             json = {"code": "TEST", "title": "Test", "weight": 50}
+        if route == {"method": "PATCH", "route": "/users/me"}:
+            json = {"full_name": "Test User"}
+        if route["method"] == "PATCH" and route["route"] != "/users/me":
+            json = {}
 
         response = await client.request(
             route["method"],
