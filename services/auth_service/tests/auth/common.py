@@ -14,6 +14,7 @@ from app.db.session import Base
 from app.modules.auth import routes as auth_routes
 from app.modules.auth.bootstrap import AuthBootstrapService
 from app.modules.roles import routes as role_routes
+from app.modules.sessions import routes as session_routes
 
 
 @pytest.fixture()
@@ -65,8 +66,10 @@ async def client(db_sessionmaker: Any) -> AsyncGenerator[AsyncClient, None]:
     app = FastAPI()
     app.dependency_overrides[auth_routes.get_session] = override_get_session
     app.dependency_overrides[role_routes.get_session] = override_get_session
+    app.dependency_overrides[session_routes.get_session] = override_get_session
     app.include_router(auth_routes.router)
     app.include_router(role_routes.router)
+    app.include_router(session_routes.router)
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
