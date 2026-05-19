@@ -1,6 +1,10 @@
 import asyncpg
 import pytest
+from uuid import uuid4
+
 from httpx import AsyncClient
+
+from app.core.security import hash_password
 
 
 @pytest.mark.anyio
@@ -121,5 +125,124 @@ async def test_register_happy_case(client: AsyncClient, asyncpg_url: str) -> Non
         "browser_name": None,
         "browser_version": None,
         "metadata": "{}",
+        "revoked_at": None,
+    }
+
+
+@pytest.mark.anyio
+async def test_login_happy_case(client: AsyncClient, asyncpg_url: str) -> None:
+    email = "login@example.com"
+    user_id = uuid4()
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        await conn.execute(
+            """
+            INSERT INTO users (id, email, full_name, hashed_password, is_active)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            user_id,
+            email,
+            "Login User",
+            hash_password("password123"),
+            True,
+        )
+    finally:
+        await conn.close()
+
+    response = await client.post(
+        "/auth/login",
+        json={
+            "email": email,
+            "password": "password123",
+            "fingerprint": "test-fingerprint",
+            "session_source": "web",
+            "device_type": "desktop",
+            "os_name": "Linux",
+            "os_version": "6",
+            "browser_name": "Firefox",
+            "browser_version": "120",
+            "metadata": {"timezone": "UTC"},
+        },
+        headers={
+            "user-agent": "pytest-login",
+            "accept-language": "en-US",
+            "origin": "https://example.com",
+            "referer": "https://example.com/login",
+        },
+    )
+
+    assert response.status_code == 200
+
+    body = response.json()
+    payload = body["payload"]
+
+    access_token = payload.pop("access_token")
+    refresh_token = payload.pop("refresh_token")
+    session_id = payload.pop("session_id")
+    response_expires_at = payload.pop("expires_at")
+    response_refresh_expires_at = payload.pop("refresh_expires_at")
+
+    assert isinstance(access_token, str) and len(access_token) > 0
+    assert isinstance(refresh_token, str) and len(refresh_token) > 0
+    assert isinstance(session_id, str) and len(session_id) > 0
+    assert isinstance(response_expires_at, str) and len(response_expires_at) > 0
+    assert isinstance(response_refresh_expires_at, str) and len(response_refresh_expires_at) > 0
+
+    assert response.cookies.get("access_token") == access_token
+    assert response.cookies.get("refresh_token") == refresh_token
+
+    assert body == {
+        "success": True,
+        "payload": {
+            "token_type": "bearer",
+        },
+    }
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        user_id = await conn.fetchval("SELECT id FROM users WHERE email = $1", email)
+        assert user_id is not None
+
+        auth_sessions = await conn.fetch(
+            "SELECT * FROM auth_sessions WHERE user_id = $1",
+            user_id,
+        )
+        assert len(auth_sessions) == 1
+
+        auth_session = dict(auth_sessions[0])
+    finally:
+        await conn.close()
+
+    auth_session_id = auth_session.pop("id")
+    auth_session_user_id = auth_session.pop("user_id")
+    token_jti = auth_session.pop("token_jti")
+    token_hash = auth_session.pop("token_hash")
+    refresh_token_hash = auth_session.pop("refresh_token_hash")
+    ip_address = auth_session.pop("ip_address")
+    session_expires_at = auth_session.pop("expires_at")
+    session_refresh_expires_at = auth_session.pop("refresh_expires_at")
+    auth_session_created_at = auth_session.pop("created_at")
+
+    assert str(auth_session_id) == session_id
+    assert auth_session_user_id == user_id
+    assert isinstance(token_jti, str) and len(token_jti) > 0
+    assert isinstance(token_hash, str) and len(token_hash) > 0
+    assert isinstance(refresh_token_hash, str) and len(refresh_token_hash) > 0
+    assert isinstance(ip_address, str) and len(ip_address) > 0
+    assert session_expires_at is not None
+    assert session_refresh_expires_at is not None
+    assert auth_session_created_at is not None
+
+    assert auth_session == {
+        "fingerprint": "test-fingerprint",
+        "user_agent": "pytest-login",
+        "session_source": "web",
+        "device_type": "desktop",
+        "os_name": "Linux",
+        "os_version": "6",
+        "browser_name": "Firefox",
+        "browser_version": "120",
+        "metadata": '{"origin": "https://example.com", "referer": "https://example.com/login", "timezone": "UTC", "accept_language": "en-US"}',
         "revoked_at": None,
     }
