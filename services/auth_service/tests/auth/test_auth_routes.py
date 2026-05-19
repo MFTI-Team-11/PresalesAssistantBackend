@@ -1,5 +1,6 @@
 import asyncpg
 import pytest
+from datetime import datetime
 from uuid import uuid4
 
 from httpx import AsyncClient
@@ -320,3 +321,77 @@ async def test_me_happy_case(client: AsyncClient, asyncpg_url: str) -> None:
             "roles": ["CUSTOMER"],
         },
     }
+
+
+@pytest.mark.anyio
+async def test_refresh_happy_case(client: AsyncClient, asyncpg_url: str) -> None:
+    email = "test@example.com"
+
+    register_response = await client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "full_name": "Refresh User",
+            "password": "password123",
+        },
+    )
+
+    assert register_response.status_code == 201
+
+    register_payload = register_response.json()["payload"]
+    original_session_id = register_payload["session_id"]
+    original_expires_at = datetime.fromisoformat(register_payload["expires_at"])
+    original_refresh_expires_at = datetime.fromisoformat(register_payload["refresh_expires_at"])
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        auth_sessions = await conn.fetch("SELECT * FROM auth_sessions")
+        assert len(auth_sessions) == 1
+
+        original_auth_session = dict(auth_sessions[0])
+    finally:
+        await conn.close()
+
+    response = await client.post("/auth/refresh")
+
+    assert response.status_code == 200
+
+    body = response.json()
+    payload = body["payload"]
+
+    access_token = payload.pop("access_token")
+    refresh_token = payload.pop("refresh_token")
+    session_id = payload.pop("session_id")
+    response_expires_at = datetime.fromisoformat(payload.pop("expires_at"))
+    response_refresh_expires_at = datetime.fromisoformat(payload.pop("refresh_expires_at"))
+
+    assert isinstance(access_token, str) and len(access_token) > 0
+    assert isinstance(refresh_token, str) and len(refresh_token) > 0
+    assert session_id == original_session_id
+    assert response_expires_at >= original_expires_at
+    assert response_refresh_expires_at >= original_refresh_expires_at
+
+    assert response.cookies.get("access_token") == access_token
+    assert response.cookies.get("refresh_token") == refresh_token
+
+    assert body == {
+        "success": True,
+        "payload": {
+            "token_type": "bearer",
+        },
+    }
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        auth_sessions = await conn.fetch("SELECT * FROM auth_sessions")
+        assert len(auth_sessions) == 1
+
+        refreshed_auth_session = dict(auth_sessions[0])
+    finally:
+        await conn.close()
+
+    assert str(refreshed_auth_session["id"]) == original_session_id
+    assert refreshed_auth_session["id"] == original_auth_session["id"]
+    assert refreshed_auth_session["token_hash"] != original_auth_session["token_hash"]
+    assert refreshed_auth_session["refresh_token_hash"] != original_auth_session["refresh_token_hash"]
+    assert refreshed_auth_session["revoked_at"] is None
