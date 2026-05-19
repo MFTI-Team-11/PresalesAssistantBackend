@@ -130,6 +130,44 @@ async def test_register_happy_case(client: AsyncClient, asyncpg_url: str) -> Non
 
 
 @pytest.mark.anyio
+async def test_register_returns_conflict_when_email_exists(
+    client: AsyncClient,
+    asyncpg_url: str,
+) -> None:
+    email = "existing@example.com"
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        await conn.execute(
+            """
+            INSERT INTO users (id, email, full_name, hashed_password, is_active)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            uuid4(),
+            email,
+            "Existing User",
+            hash_password("password123"),
+            True,
+        )
+    finally:
+        await conn.close()
+
+    response = await client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "full_name": "New User",
+            "password": "password123",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "Email already exists",
+    }
+
+
+@pytest.mark.anyio
 async def test_login_happy_case(client: AsyncClient, asyncpg_url: str) -> None:
     email = "login@example.com"
     user_id = uuid4()
