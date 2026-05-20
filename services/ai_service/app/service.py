@@ -4,7 +4,9 @@ import re
 from fastapi import HTTPException, status
 from pydantic import ValidationError
 
+from app.core.config import settings
 from app.gigachat import GigaChatClient
+from app.openai_client import OpenAIClient
 from app.schemas import AnalysisResponse, QuestionsResponse
 
 
@@ -197,8 +199,14 @@ PRESALE_ESTIMATE_SYSTEM_PROMPT = f"""
 
 
 class AiService:
-    def __init__(self, client: GigaChatClient | None = None) -> None:
-        self.client = client or GigaChatClient()
+    def __init__(self, client: GigaChatClient | OpenAIClient | None = None) -> None:
+        self.client = client or self._client_from_settings()
+
+    def _client_from_settings(self) -> GigaChatClient | OpenAIClient:
+        if settings.ai_provider == "openai":
+            return OpenAIClient()
+
+        return GigaChatClient()
 
     async def questions(self, text: str) -> list[str]:
         content = await self.client.chat_json(
