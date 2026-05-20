@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     openai_files_url: str = "https://api.openai.com/v1/files"
     openai_file_purpose: str = "assistants"
     openai_timeout_seconds: float = 60.0
+    openai_stream_output_path: str | None = "/tmp/out.txt"
 
     model_config = SettingsConfigDict(env_file="../../.env", env_prefix="AI_")
 

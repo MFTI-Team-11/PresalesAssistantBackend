@@ -99,9 +99,9 @@ async def generate_presale_estimate(
         ),
     ],
     files: Annotated[
-        list[UploadFile] | None,
+        list[UploadFile],
         File(description="Файлы, фото, документы и изображения с требованиями или ставками"),
-    ] = None,
+    ] = [],
 ) -> dict:
     parsed_answers = parse_answers(answers)
     attachment_groups, source_documents = await upload_ai_files(files)
