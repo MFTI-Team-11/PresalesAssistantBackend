@@ -8,6 +8,8 @@ from httpx import AsyncClient
 CURRENT_DIR = Path(__file__).resolve().parent
 
 
+# to run this test:
+# RUN_AI_ESTIMATE_TEST=1 AI_AI_PROVIDER=openai AI_OPENAI_API_KEY='sk-proj-...' poetry run pytest tests/ai/test_estimate_route_manual.py -s
 @pytest.mark.anyio
 @pytest.mark.skipif(
     os.getenv("RUN_AI_ESTIMATE_TEST") != "1",
