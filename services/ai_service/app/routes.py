@@ -20,7 +20,7 @@ router = APIRouter()
 ai_service = AiService()
 
 
-async def upload_gigachat_files(files: list[UploadFile] | None) -> tuple[list[list[str]], list[dict]]:
+async def upload_ai_files(files: list[UploadFile] | None) -> tuple[list[list[str]], list[dict]]:
     if not files:
         return [], []
     document_group: list[str] = []
@@ -45,7 +45,7 @@ async def upload_gigachat_files(files: list[UploadFile] | None) -> tuple[list[li
                 "filename": file.filename,
                 "content_type": file.content_type,
                 "bytes": len(raw),
-                "gigachat_file_id": file_id,
+                "ai_file_id": file_id,
                 "modalities": modalities,
             }
         )
@@ -58,7 +58,7 @@ async def upload_gigachat_files(files: list[UploadFile] | None) -> tuple[list[li
 async def generate_questions(
     data: QuestionsRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
-):
+) -> dict:
     response = QuestionsResponse(questions=await ai_service.questions(data.text))
     session.add(
         AiRequestLog(
@@ -74,7 +74,7 @@ async def generate_questions(
 @router.get("/questions/default")
 async def get_default_questions(
     session: Annotated[AsyncSession, Depends(get_session)],
-):
+) -> dict:
     response = DefaultQuestionsResponse(questions=ai_service.default_question_items())
     session.add(
         AiRequestLog(
@@ -99,12 +99,12 @@ async def generate_presale_estimate(
         ),
     ],
     files: Annotated[
-        list[UploadFile] | None,
+        list[UploadFile],
         File(description="Файлы, фото, документы и изображения с требованиями или ставками"),
-    ] = None,
-):
+    ] = [],
+) -> dict:
     parsed_answers = parse_answers(answers)
-    attachment_groups, source_documents = await upload_gigachat_files(files)
+    attachment_groups, source_documents = await upload_ai_files(files)
     estimate = await ai_service.presale_estimate(
         answers=parsed_answers,
         attachment_groups=attachment_groups,

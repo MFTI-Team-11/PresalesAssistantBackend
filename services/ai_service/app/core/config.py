@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     db_user: str = "ai"
     db_password: str = "ai"
     db_dsn: str | None = None
+    ai_provider: str = "gigachat"
     gigachat_credentials: str | None = None
     gigachat_access_token: str | None = None
     gigachat_scope: str = "GIGACHAT_API_PERS"
@@ -22,11 +23,18 @@ class Settings(BaseSettings):
     gigachat_files_url: str = "https://gigachat.devices.sberbank.ru/api/v1/files"
     gigachat_timeout_seconds: float = 60.0
     gigachat_verify_ssl: bool = False
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-4.1"
+    openai_responses_url: str = "https://api.openai.com/v1/responses"
+    openai_files_url: str = "https://api.openai.com/v1/files"
+    openai_file_purpose: str = "assistants"
+    openai_timeout_seconds: float = 60.0
+    openai_stream_output_path: str | None = "/tmp/out.txt"
 
     model_config = SettingsConfigDict(env_file="../../.env", env_prefix="AI_")
 
     @model_validator(mode="after")
-    def build_database_url(self):
+    def build_database_url(self) -> "Settings":
         if self.database_url:
             return self
         if self.db_dsn:
