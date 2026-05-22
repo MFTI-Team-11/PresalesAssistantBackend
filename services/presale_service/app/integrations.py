@@ -1,4 +1,5 @@
 import json
+from collections.abc import AsyncGenerator
 
 import httpx
 
@@ -17,6 +18,28 @@ class AiServiceClient:
             response = await client.post("/questions", json={"text": text})
             response.raise_for_status()
             return response.json()["payload"]["questions"]
+
+    async def chat(self, messages: list[dict]) -> str:
+        async with httpx.AsyncClient(base_url=settings.ai_service_url, timeout=180) as client:
+            response = await client.post("/chat", json={"messages": messages})
+            response.raise_for_status()
+            return response.json()["payload"]["message"]
+
+    async def chat_stream(self, messages: list[dict]) -> AsyncGenerator[str, None]:
+        async with httpx.AsyncClient(base_url=settings.ai_service_url, timeout=180) as client:
+            async with client.stream("POST", "/chat/stream", json={"messages": messages}) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line.removeprefix("data: ").strip()
+                    if not data:
+                        continue
+                    event = json.loads(data)
+                    if event.get("delta"):
+                        yield str(event["delta"])
+                    if event.get("done"):
+                        break
 
     async def generate_presale_estimate(self, answers: list[str], files: list[dict]) -> dict:
         multipart_files = []

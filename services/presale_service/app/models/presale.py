@@ -15,6 +15,7 @@ class PresaleRequest(Base):
     owner_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), index=True)
     title: Mapped[str] = mapped_column(String(255))
     customer_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="draft")
     desired_outputs: Mapped[list[str]] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -27,6 +28,12 @@ class PresaleRequest(Base):
     questions = relationship("PreAnalysisQuestion", back_populates="presale", cascade="all, delete-orphan")
     analysis = relationship(
         "PresaleAnalysis", back_populates="presale", cascade="all, delete-orphan", uselist=False
+    )
+    chat_messages = relationship(
+        "PresaleChatMessage",
+        back_populates="presale",
+        cascade="all, delete-orphan",
+        order_by="PresaleChatMessage.created_at",
     )
 
 
@@ -88,3 +95,17 @@ class PresaleAnalysis(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     presale = relationship("PresaleRequest", back_populates="analysis")
+
+
+class PresaleChatMessage(Base):
+    __tablename__ = "presale_chat_messages"
+
+    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    presale_id: Mapped[UUID] = mapped_column(
+        ForeignKey("presale_requests.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(20))
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    presale = relationship("PresaleRequest", back_populates="chat_messages")

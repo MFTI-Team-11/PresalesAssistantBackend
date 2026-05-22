@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class PresaleCreate(BaseModel):
     title: str = Field(min_length=3, max_length=255)
     customer_name: str | None = Field(default=None, max_length=255)
+    description: str | None = None
     desired_outputs: list[str] = Field(default_factory=list)
 
 
@@ -15,6 +16,7 @@ class PresaleRead(BaseModel):
     owner_id: UUID
     title: str
     customer_name: str | None
+    description: str | None
     status: str
     desired_outputs: list[str]
     created_at: datetime
@@ -68,8 +70,22 @@ class AnalysisRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ChatMessageCreate(BaseModel):
+    message: str = Field(min_length=1)
+
+
+class ChatMessageRead(BaseModel):
+    id: UUID
+    role: str
+    content: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class EstimateHistoryRead(BaseModel):
     presale: PresaleRead
     questions: list[QuestionRead]
     documents: list[DocumentRead]
     analysis: AnalysisRead | None
+    chat_messages: list[ChatMessageRead] = Field(default_factory=list)

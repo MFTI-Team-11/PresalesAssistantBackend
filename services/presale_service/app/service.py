@@ -1,5 +1,9 @@
 from uuid import UUID
 from uuid import uuid4
+from io import BytesIO
+from zipfile import BadZipFile, ZipFile
+import xml.etree.ElementTree as ET
+from collections.abc import AsyncGenerator
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import delete, select
@@ -12,6 +16,7 @@ from app.integrations import AiServiceClient
 from app.models.presale import (
     PreAnalysisQuestion,
     PresaleAnalysis,
+    PresaleChatMessage,
     PresaleDocument,
     PresaleRequest,
     SpecialistRate,
@@ -53,6 +58,7 @@ class PresaleService:
                 selectinload(PresaleRequest.rates),
                 selectinload(PresaleRequest.questions),
                 selectinload(PresaleRequest.analysis),
+                selectinload(PresaleRequest.chat_messages),
             )
         )
         presale = result.scalar_one_or_none()
@@ -60,10 +66,13 @@ class PresaleService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Presale not found")
         return presale
 
+    async def default_questions(self) -> list[dict]:
+        return await self.ai.default_questions()
+
     async def upload_document(self, presale_id: UUID, user: CurrentUser, file: UploadFile):
         presale = await self.get_owned(presale_id, user)
         raw = await file.read()
-        text = raw.decode("utf-8", errors="ignore")
+        text = self._extract_text(raw, file.filename or "", file.content_type)
         object_key = self._storage_key(user, presale, file.filename or "attachment")
         self.storage.put_file(object_key, raw, file.content_type)
         document = PresaleDocument(
@@ -111,7 +120,7 @@ class PresaleService:
             filename = file.filename or "attachment"
             object_key = self._storage_key(user, presale, filename)
             self.storage.put_file(object_key, raw, file.content_type)
-            text = raw.decode("utf-8", errors="ignore")
+            text = self._extract_text(raw, filename, file.content_type)
             self.session.add(
                 PresaleDocument(
                     presale_id=presale.id,
@@ -151,7 +160,74 @@ class PresaleService:
             "questions": presale.questions,
             "documents": presale.documents,
             "analysis": presale.analysis,
+            "chat_messages": presale.chat_messages,
         }
+
+    async def file_url(self, presale_id: UUID, file_id: UUID, user: CurrentUser) -> str:
+        presale = await self.get_owned(presale_id, user)
+        document = next((item for item in presale.documents if item.id == file_id), None)
+        if not document:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+        if not document.storage_object_key:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File object not found")
+        url = self.storage.presigned_get_url(document.storage_object_key)
+        if not url:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File object not found")
+        return url
+
+    async def chat_messages(self, presale_id: UUID, user: CurrentUser) -> list[PresaleChatMessage]:
+        presale = await self.get_owned(presale_id, user)
+        return list(presale.chat_messages)
+
+    async def chat(self, presale_id: UUID, user: CurrentUser, message: str) -> list[PresaleChatMessage]:
+        presale = await self.get_owned(presale_id, user)
+        user_message = PresaleChatMessage(
+            presale_id=presale.id,
+            role="user",
+            content=message,
+        )
+        answer = await self.ai.chat(self._chat_context(presale, message))
+        assistant_message = PresaleChatMessage(
+            presale_id=presale.id,
+            role="assistant",
+            content=answer,
+        )
+        self.session.add_all([user_message, assistant_message])
+        await self.session.commit()
+        await self.session.refresh(user_message)
+        await self.session.refresh(assistant_message)
+        return [user_message, assistant_message]
+
+    async def chat_stream(
+        self,
+        presale_id: UUID,
+        user: CurrentUser,
+        message: str,
+    ) -> AsyncGenerator[str, None]:
+        presale = await self.get_owned(presale_id, user)
+        user_message = PresaleChatMessage(
+            presale_id=presale.id,
+            role="user",
+            content=message,
+        )
+        self.session.add(user_message)
+        await self.session.commit()
+        await self.session.refresh(user_message)
+
+        answer_parts: list[str] = []
+        async for chunk in self.ai.chat_stream(self._chat_context(presale, message)):
+            answer_parts.append(chunk)
+            yield chunk
+
+        answer = "".join(answer_parts).strip()
+        if answer:
+            assistant_message = PresaleChatMessage(
+                presale_id=presale.id,
+                role="assistant",
+                content=answer,
+            )
+            self.session.add(assistant_message)
+            await self.session.commit()
 
     async def replace_rates(self, presale_id: UUID, user: CurrentUser, rates: list[SpecialistRateInput]):
         presale = await self.get_owned(presale_id, user)
@@ -188,3 +264,83 @@ class PresaleService:
 
     def _storage_key(self, user: CurrentUser, presale: PresaleRequest, filename: str) -> str:
         return f"{user.id}/{presale.id}/{uuid4().hex}_{filename}"
+
+    def _chat_context(self, presale: PresaleRequest, message: str) -> list[dict]:
+        context = {
+            "presale": {
+                "title": presale.title,
+                "customer_name": presale.customer_name,
+                "description": presale.description,
+                "status": presale.status,
+                "desired_outputs": presale.desired_outputs,
+            },
+            "questions": [
+                {"question": item.question, "answer": item.answer}
+                for item in presale.questions
+            ],
+            "documents": [
+                {
+                    "filename": item.filename,
+                    "content_type": item.content_type,
+                    "text_content": item.text_content,
+                }
+                for item in presale.documents
+            ],
+            "analysis": presale.analysis.payload if presale.analysis else None,
+        }
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    "Контекст пресейла. Используй его при ответе на вопрос пользователя:\n"
+                    f"{context}"
+                ),
+            }
+        ]
+        messages.extend(
+            {"role": item.role, "content": item.content}
+            for item in presale.chat_messages[-20:]
+        )
+        messages.append({"role": "user", "content": message})
+        return messages
+
+    def _extract_text(self, raw: bytes, filename: str, content_type: str | None) -> str:
+        name = filename.lower()
+        if name.endswith(".docx"):
+            return self._extract_docx_text(raw)
+        if name.endswith(".xlsx"):
+            return self._extract_xlsx_text(raw)
+        if content_type and content_type.startswith("text/"):
+            return self._clean_text(raw.decode("utf-8", errors="ignore"))
+        return ""
+
+    def _extract_docx_text(self, raw: bytes) -> str:
+        try:
+            with ZipFile(BytesIO(raw)) as archive:
+                document = archive.read("word/document.xml")
+        except (BadZipFile, KeyError):
+            return ""
+        return self._xml_text(document)
+
+    def _extract_xlsx_text(self, raw: bytes) -> str:
+        try:
+            with ZipFile(BytesIO(raw)) as archive:
+                sheet_names = [
+                    name
+                    for name in archive.namelist()
+                    if name.startswith("xl/worksheets/") and name.endswith(".xml")
+                ]
+                parts = [self._xml_text(archive.read(name)) for name in sheet_names]
+        except BadZipFile:
+            return ""
+        return self._clean_text("\n".join(part for part in parts if part))
+
+    def _xml_text(self, raw_xml: bytes) -> str:
+        try:
+            root = ET.fromstring(raw_xml)
+        except ET.ParseError:
+            return ""
+        return self._clean_text(" ".join(text for text in root.itertext() if text.strip()))
+
+    def _clean_text(self, text: str) -> str:
+        return text.replace("\x00", "").strip()

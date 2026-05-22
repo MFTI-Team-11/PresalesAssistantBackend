@@ -1,4 +1,5 @@
 from io import BytesIO
+from urllib.parse import urlsplit, urlunsplit
 
 from minio import Minio
 from minio.error import S3Error
@@ -37,6 +38,22 @@ class FileStorage:
 
     def presigned_get_url(self, object_key: str) -> str | None:
         try:
-            return self.client.presigned_get_object(self.bucket, object_key)
+            url = self.client.presigned_get_object(self.bucket, object_key)
         except S3Error:
             return None
+        return self._public_url(url)
+
+    def _public_url(self, url: str) -> str:
+        public_url = settings.minio_public_url.rstrip("/")
+        if not public_url:
+            return url
+
+        signed = urlsplit(url)
+        public = urlsplit(public_url)
+        public_path = public.path.rstrip("/")
+        path = f"{public_path}{signed.path}"
+
+        if public.scheme and public.netloc:
+            return urlunsplit((public.scheme, public.netloc, path, signed.query, signed.fragment))
+
+        return urlunsplit(("", "", path, signed.query, signed.fragment))

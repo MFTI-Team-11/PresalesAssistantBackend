@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     minio_secret_key: str = "minioadmin"
     minio_bucket: str = "presale-files"
     minio_secure: bool = False
+    minio_public_url: str = "/minio"
 
     model_config = SettingsConfigDict(env_file="../../.env", env_prefix="PRESALE_")
 
