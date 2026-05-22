@@ -2,6 +2,7 @@ import json
 from collections.abc import AsyncGenerator
 
 import httpx
+from fastapi import HTTPException, status
 
 from app.core.config import settings
 
@@ -60,5 +61,11 @@ class AiServiceClient:
                 data={"answers": json.dumps(answers, ensure_ascii=False)},
                 files=multipart_files or None,
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"AI service estimate failed: {response.text[:500]}",
+                ) from exc
             return response.json()["payload"]

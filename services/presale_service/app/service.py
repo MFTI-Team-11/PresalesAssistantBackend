@@ -29,6 +29,16 @@ from app.schemas import (
 
 
 class PresaleService:
+    AI_SUPPORTED_EXTENSIONS = {".docx", ".xlsx", ".pdf", ".txt", ".csv", ".md"}
+    AI_SUPPORTED_CONTENT_TYPES = {
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/csv",
+        "text/markdown",
+        "text/plain",
+    }
+
     def __init__(self, session: AsyncSession):
         self.session = session
         self.ai = AiServiceClient()
@@ -132,13 +142,14 @@ class PresaleService:
                     size_bytes=len(raw),
                 )
             )
-            ai_files.append(
-                {
-                    "filename": filename,
-                    "content_type": file.content_type,
-                    "content": raw,
-                }
-            )
+            if self._can_send_to_ai(filename, file.content_type):
+                ai_files.append(
+                    {
+                        "filename": filename,
+                        "content_type": file.content_type,
+                        "content": raw,
+                    }
+                )
 
         payload = await self.ai.generate_presale_estimate(answers, ai_files)
         if presale.analysis:
@@ -344,3 +355,12 @@ class PresaleService:
 
     def _clean_text(self, text: str) -> str:
         return text.replace("\x00", "").strip()
+
+    def _can_send_to_ai(self, filename: str, content_type: str | None) -> bool:
+        normalized_type = (content_type or "").split(";", 1)[0].strip().lower()
+        suffix = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        return (
+            suffix in self.AI_SUPPORTED_EXTENSIONS
+            or normalized_type in self.AI_SUPPORTED_CONTENT_TYPES
+            or normalized_type.startswith("text/")
+        )
