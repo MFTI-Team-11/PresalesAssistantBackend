@@ -2,12 +2,9 @@ from typing import Annotated
 
 import json
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_session
-from app.models.request_log import AiRequestLog
 from app.schemas import (
     ChatRequest,
     ChatResponse,
@@ -60,50 +57,22 @@ async def upload_ai_files(files: list[UploadFile] | None) -> tuple[list[list[str
 @router.post("/questions")
 async def generate_questions(
     data: QuestionsRequest,
-    session: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict:
     response = QuestionsResponse(questions=await ai_service.questions(data.text))
-    session.add(
-        AiRequestLog(
-            operation="questions",
-            request_payload=data.model_dump(),
-            response_payload=response.model_dump(),
-        )
-    )
-    await session.commit()
     return success_response(response.model_dump())
 
 
 @router.get("/questions/default")
-async def get_default_questions(
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> dict:
+async def get_default_questions() -> dict:
     response = DefaultQuestionsResponse(questions=ai_service.default_question_items())
-    session.add(
-        AiRequestLog(
-            operation="questions_default",
-            request_payload={},
-            response_payload=response.model_dump(),
-        )
-    )
-    await session.commit()
     return success_response(response.model_dump())
 
 
 @router.post("/chat")
 async def chat(
     data: ChatRequest,
-    session: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict:
     response = ChatResponse(message=await ai_service.presale_chat(data.messages))
-    session.add(
-        AiRequestLog(
-            operation="presale_chat",
-            request_payload=data.model_dump(),
-            response_payload=response.model_dump(),
-        )
-    )
-    await session.commit()
     return success_response(response.model_dump())
 
 
@@ -119,7 +88,6 @@ async def chat_stream(data: ChatRequest) -> StreamingResponse:
 
 @router.post("/presale/estimate")
 async def generate_presale_estimate(
-    session: Annotated[AsyncSession, Depends(get_session)],
     answers: Annotated[
         str,
         Form(
@@ -140,17 +108,6 @@ async def generate_presale_estimate(
         attachment_groups=attachment_groups,
     )
     response = PresaleEstimateResponse(**estimate, source_documents=source_documents)
-    session.add(
-        AiRequestLog(
-            operation="presale_estimate",
-            request_payload={
-                "answers": parsed_answers,
-                "source_documents": source_documents,
-            },
-            response_payload=response.model_dump(),
-        )
-    )
-    await session.commit()
     return success_response(response.model_dump())
 
 

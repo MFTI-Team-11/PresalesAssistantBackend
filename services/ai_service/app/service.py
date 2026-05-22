@@ -25,7 +25,8 @@ DEFAULT_PREANALYSIS_QUESTIONS = [
     "Какая ожидаемая нагрузка: количество пользователей, пресейлов в месяц, "
     "объем документов и данных?",
     "Какие сроки, бюджетные ограничения и приоритеты по этапам проекта?",
-    "Какие ставки специалистов и роли команды нужно использовать в оценке?",
+    "Какие ставки специалистов и роли команды нужно использовать в оценке? "
+    "Если ставок нет, оставьте поле пустым - ассистент предложит состав команды сам.",
     "Какая схема технической поддержки нужна после завершения проекта?",
     "Нужно ли включать годовое гарантийное обслуживание в бюджет проекта?",
     "Какие ключевые риски, ограничения и допущения уже известны?",
@@ -82,9 +83,10 @@ DEFAULT_PREANALYSIS_QUESTION_META = [
     {
         "id": "rates_and_roles",
         "category": "budget",
+        "required": False,
         "allow_file": True,
-        "file_hint": "Можно приложить изображение с данными о сотрудниках или таблицу ставок",
-        "placeholder": "Например: бэкендер 1000р/час, архитектор 2000р/час",
+        "file_hint": "Можно приложить таблицу ставок. Если ее нет, ассистент использует рыночные допущения",
+        "placeholder": "Необязательно. Например: бэкендер 1000р/час, архитектор 2000р/час",
     },
     {
         "id": "support_scheme",
@@ -117,7 +119,6 @@ DEFAULT_RATES = {
 
 
 CASE_6_CONTEXT = """
-Кейс 6: AI ассистент для пресейла.
 Цель: ускорить и повысить точность первичной оценки IT-проектов для пресейла.
 Ассистент должен принимать документы заказчика, задавать вопросы для преданализа,
 формировать ФТ и НФТ, декомпозировать задачи, рекомендовать архитектуру.
@@ -126,7 +127,7 @@ CASE_6_CONTEXT = """
 Отдельно ассистент суммирует расходы по месяцам.
 Ограничения: on-premise, объем 30-50 пресейлов в месяц.
 Данные нельзя передавать за пределы компании.
-Сценарий: пользователь создает запрос, загружает требования и ставки.
+Сценарий: пользователь создает запрос, загружает требования и при наличии ставки.
 Пользователь выбирает желаемые результаты, получает вопросы, отвечает на них
 и затем получает пресейл-результат.
 """
@@ -165,6 +166,11 @@ PRESALE_ESTIMATE_SYSTEM_PROMPT = f"""
 4. желаемые результаты пресейла;
 5. ограничения по срокам, поддержке, гарантии, on-premise, безопасности.
 
+Ставки специалистов необязательны. Если пользователь не передал ставки, не задавай
+дополнительный вопрос и не останавливай оценку: самостоятельно предложи состав
+команды, роли, грейды и загрузку специалистов без простоя, используй рыночные
+ставки из контекста и явно пометь их как допущение.
+
 Если ставка написана как "бэкендер 1000р в час", преобразуй роль в
 "Backend Developer" и hourly_rate=1000. Если ставка есть только на фото или
 в таблице, извлеки ее из файла. Если какой-то ставки нет, явно укажи допущение
@@ -192,7 +198,7 @@ PRESALE_ESTIMATE_SYSTEM_PROMPT = f"""
       "components": [{{"name": "...", "cpu": 2, "ram_gb": 4, "storage_gb": 50}}]
     }},
     "team_options": [
-      {{"name": "...", "duration_months": 6, "roles": ["Backend Developer middle"]}}
+      {{"name": "...", "duration_months": 6, "without_idle_time": true, "roles": ["Backend Developer middle 1.0 FTE"]}}
     ],
     "risks": [
       {{"risk": "...", "impact": "low|medium|high", "mitigation": "..."}}
@@ -243,7 +249,7 @@ class AiService:
                 "id": meta["id"],
                 "text": question,
                 "category": meta["category"],
-                "required": True,
+                "required": bool(meta.get("required", True)),
                 "answer_type": "text",
                 "allow_file": bool(meta.get("allow_file", False)),
                 "file_required": bool(meta.get("file_required", False)),
@@ -289,12 +295,16 @@ class AiService:
         )
         payload = self._parse_json(content)
         analysis = AnalysisResponse.model_validate(payload.get("analysis", {})).model_dump()
+        project_months = int(payload.get("project_months") or 6)
+        project_months = min(max(project_months, 1), 36)
+        if not analysis.get("team_options"):
+            analysis["team_options"] = self.default_team_options(analysis["tasks"], project_months)
         extracted_rates = payload.get("extracted_rates", [])
         if not isinstance(extracted_rates, list):
             extracted_rates = []
+        if not extracted_rates:
+            extracted_rates = self.default_rate_items(analysis["tasks"])
         support_scheme = str(payload.get("support_scheme") or "three_lines_24x7")
-        project_months = int(payload.get("project_months") or 6)
-        project_months = min(max(project_months, 1), 36)
         normalized_rates = self.normalize_rates(extracted_rates)
         effort_budget = self.effort_budget(analysis["tasks"], normalized_rates)
         warranty_budget = self.warranty_budget(effort_budget["total_cost"])
@@ -339,6 +349,58 @@ class AiService:
             if role and hourly_rate:
                 rates[str(role)] = float(hourly_rate)
         return rates
+
+    def default_rate_items(self, tasks: list[dict]) -> list[dict]:
+        roles = self._task_roles(tasks) or list(DEFAULT_RATES)
+        return [
+            {
+                "role": role,
+                "grade": "middle",
+                "hourly_rate": DEFAULT_RATES.get(role, 3000),
+                "source": "market_assumption",
+            }
+            for role in roles
+        ]
+
+    def default_team_options(self, tasks: list[dict], project_months: int) -> list[dict]:
+        role_hours: dict[str, float] = {}
+        for task in tasks:
+            for estimate in task.get("estimates", []):
+                role = str(estimate.get("role") or "Backend Developer")
+                role_hours[role] = role_hours.get(role, 0.0) + float(estimate.get("hours") or 0)
+        if not role_hours:
+            role_hours = {
+                "Analyst": 320,
+                "Architect": 160,
+                "Backend Developer": 640,
+                "Frontend Developer": 480,
+                "QA Engineer": 320,
+                "DevOps Engineer": 160,
+                "Project Manager": 240,
+            }
+        monthly_capacity = max(project_months, 1) * 160
+        roles = []
+        for role, hours in sorted(role_hours.items()):
+            fte = max(0.25, round((hours / monthly_capacity) * 4) / 4)
+            roles.append(f"{role} middle {fte:g} FTE")
+        return [
+            {
+                "name": "Сбалансированная команда",
+                "duration_months": project_months,
+                "without_idle_time": True,
+                "roles": roles,
+                "assumption": "Состав рассчитан по трудозатратам и рыночным ставкам, так как ставки не были переданы.",
+            }
+        ]
+
+    def _task_roles(self, tasks: list[dict]) -> list[str]:
+        roles = {
+            str(estimate.get("role"))
+            for task in tasks
+            for estimate in task.get("estimates", [])
+            if estimate.get("role")
+        }
+        return sorted(roles)
 
     def effort_budget(self, tasks: list[dict], rates: dict[str, float]) -> dict:
         total_hours = 0.0
