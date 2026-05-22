@@ -3,11 +3,14 @@ from typing import Annotated
 import json
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.models.request_log import AiRequestLog
 from app.schemas import (
+    ChatRequest,
+    ChatResponse,
     DefaultQuestionsResponse,
     QuestionsRequest,
     QuestionsResponse,
@@ -85,6 +88,33 @@ async def get_default_questions(
     )
     await session.commit()
     return success_response(response.model_dump())
+
+
+@router.post("/chat")
+async def chat(
+    data: ChatRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict:
+    response = ChatResponse(message=await ai_service.presale_chat(data.messages))
+    session.add(
+        AiRequestLog(
+            operation="presale_chat",
+            request_payload=data.model_dump(),
+            response_payload=response.model_dump(),
+        )
+    )
+    await session.commit()
+    return success_response(response.model_dump())
+
+
+@router.post("/chat/stream")
+async def chat_stream(data: ChatRequest) -> StreamingResponse:
+    async def event_stream():
+        async for chunk in ai_service.presale_chat_stream(data.messages):
+            yield f"data: {json.dumps({'delta': chunk}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.post("/presale/estimate")

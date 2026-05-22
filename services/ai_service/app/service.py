@@ -1,5 +1,6 @@
 ﻿import json
 import re
+from collections.abc import AsyncGenerator
 
 from fastapi import HTTPException, status
 from pydantic import ValidationError
@@ -128,6 +129,14 @@ CASE_6_CONTEXT = """
 Сценарий: пользователь создает запрос, загружает требования и ставки.
 Пользователь выбирает желаемые результаты, получает вопросы, отвечает на них
 и затем получает пресейл-результат.
+"""
+
+PRESALE_CHAT_SYSTEM_PROMPT = f"""
+Ты AI ассистент для пресейла. Отвечай на вопросы пользователя по конкретному пресейлу.
+Используй только переданный контекст: краткую форму, ответы преданализа, документы,
+результат оценки и предыдущий диалог. Если данных не хватает, явно скажи, что нужно уточнить.
+Отвечай по-русски, кратко и прикладно.
+{CASE_6_CONTEXT}
 """
 
 QUESTIONS_SYSTEM_PROMPT = f"""
@@ -301,6 +310,26 @@ class AiService:
                 project_months,
             ),
         }
+
+    async def presale_chat(self, messages: list[dict]) -> str:
+        content = await self.client.chat_json(
+            [
+                {"role": "system", "content": PRESALE_CHAT_SYSTEM_PROMPT},
+                *messages,
+            ],
+            temperature=0.2,
+        )
+        return content.strip()
+
+    async def presale_chat_stream(self, messages: list[dict]) -> AsyncGenerator[str, None]:
+        async for chunk in self.client.chat_stream(
+            [
+                {"role": "system", "content": PRESALE_CHAT_SYSTEM_PROMPT},
+                *messages,
+            ],
+            temperature=0.2,
+        ):
+            yield chunk
 
     def normalize_rates(self, raw_rates: list[dict]) -> dict[str, float]:
         rates = dict(DEFAULT_RATES)

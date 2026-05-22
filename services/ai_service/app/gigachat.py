@@ -1,5 +1,7 @@
 import asyncio
+import json
 import time
+from collections.abc import AsyncGenerator
 from uuid import uuid4
 
 import httpx
@@ -90,6 +92,69 @@ class GigaChatClient:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="GigaChat returned an unexpected completion response",
             ) from exc
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        temperature: float = 0.2,
+        attachments: list[str] | None = None,
+        attachment_groups: list[list[str]] | None = None,
+        function_call_auto: bool = False,
+    ) -> AsyncGenerator[str, None]:
+        token = await self._get_access_token()
+        prepared_messages = [dict(message) for message in messages]
+        if attachment_groups:
+            self._attach_grouped_files(prepared_messages, attachment_groups)
+        elif attachments:
+            for message in reversed(prepared_messages):
+                if message.get("role") == "user":
+                    message["attachments"] = attachments
+                    break
+        payload = {
+            "model": settings.gigachat_model,
+            "messages": prepared_messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if function_call_auto:
+            payload["function_call"] = "auto"
+        async with httpx.AsyncClient(
+            timeout=settings.gigachat_timeout_seconds,
+            verify=settings.gigachat_verify_ssl,
+        ) as client:
+            async with client.stream(
+                "POST",
+                settings.gigachat_chat_url,
+                headers={"Authorization": f"Bearer {token}"},
+                json=payload,
+            ) as response:
+                if response.status_code >= 400:
+                    error_text = await response.aread()
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"GigaChat completion failed: {error_text.decode()[:500]}",
+                    )
+                async for line in response.aiter_lines():
+                    delta = self._stream_delta(line)
+                    if delta:
+                        yield delta
+
+    def _stream_delta(self, line: str) -> str | None:
+        if not line.startswith("data: "):
+            return None
+        data = line.removeprefix("data: ").strip()
+        if not data or data == "[DONE]":
+            return None
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError:
+            return None
+        try:
+            return event["choices"][0]["delta"].get("content") or event["choices"][0][
+                "message"
+            ].get("content")
+        except (KeyError, IndexError, TypeError, AttributeError):
+            return None
 
     def _attach_grouped_files(
         self,

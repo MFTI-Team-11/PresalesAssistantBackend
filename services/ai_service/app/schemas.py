@@ -9,6 +9,14 @@ class QuestionsResponse(BaseModel):
     questions: list[str]
 
 
+class ChatRequest(BaseModel):
+    messages: list[dict]
+
+
+class ChatResponse(BaseModel):
+    message: str
+
+
 class PreanalysisQuestion(BaseModel):
     id: str
     text: str

@@ -1,4 +1,5 @@
 import json
+from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import httpx
@@ -90,6 +91,46 @@ class OpenAIClient:
             )
 
         return text
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        temperature: float = 0.2,
+        attachments: list[str] | None = None,
+        attachment_groups: list[list[str]] | None = None,
+        function_call_auto: bool = False,
+    ) -> AsyncGenerator[str, None]:
+        if not settings.openai_api_key:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="AI_OPENAI_API_KEY is not configured",
+            )
+
+        payload = {
+            "model": settings.openai_model,
+            "input": self._input(messages, attachments, attachment_groups),
+            "temperature": temperature,
+            "stream": True,
+        }
+
+        async with httpx.AsyncClient(timeout=settings.openai_timeout_seconds) as client:
+            async with client.stream(
+                "POST",
+                settings.openai_responses_url,
+                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                json=payload,
+            ) as response:
+                if response.status_code >= 400:
+                    error_text = await response.aread()
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"OpenAI response failed: {error_text.decode()[:500]}",
+                    )
+
+                async for line in response.aiter_lines():
+                    delta = self._stream_delta(line)
+                    if delta:
+                        yield delta
 
     async def _chat_json_stream(self, payload: dict) -> str:
         payload = {**payload, "stream": True}
