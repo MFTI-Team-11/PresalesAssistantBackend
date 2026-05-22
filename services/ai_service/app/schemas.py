@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class QuestionsRequest(BaseModel):
@@ -26,13 +26,13 @@ class DefaultQuestionsResponse(BaseModel):
 
 
 class AnalysisResponse(BaseModel):
-    functional_requirements: list[dict]
-    nonfunctional_requirements: list[dict]
-    tasks: list[dict]
-    architecture_options: list[dict]
-    sizing: dict
-    team_options: list[dict]
-    risks: list[dict]
+    functional_requirements: list[dict] = Field(default_factory=list)
+    nonfunctional_requirements: list[dict] = Field(default_factory=list)
+    tasks: list[dict] = Field(default_factory=list)
+    architecture_options: list[dict] = Field(default_factory=list)
+    sizing: dict = Field(default_factory=dict)
+    team_options: list[dict] = Field(default_factory=list)
+    risks: list[dict] = Field(default_factory=list)
 
 
 class PresaleEstimateResponse(BaseModel):
