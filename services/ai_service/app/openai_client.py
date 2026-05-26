@@ -200,11 +200,13 @@ class OpenAIClient:
 
     def _message(self, message: dict) -> dict:
         role = "developer" if message.get("role") == "system" else message.get("role", "user")
+        content_type = "output_text" if role == "assistant" else "input_text"
+
         return {
             "role": role,
             "content": [
                 {
-                    "type": "input_text",
+                    "type": content_type,
                     "text": str(message.get("content", "")),
                 }
             ],
