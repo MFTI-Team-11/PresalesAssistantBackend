@@ -989,6 +989,56 @@ async def test_generate_estimate_saves_answers_files_and_analysis(
 
 
 @pytest.mark.anyio
+async def test_generate_estimate_accepts_single_file_mapping(
+    client: AsyncClient,
+    asyncpg_url: str,
+    ai_service_stub: AiServiceStub,
+    minio_service_url: str,
+) -> None:
+    user_id = uuid4()
+    presale_id = uuid4()
+    token = create_access_token(user_id)
+    file_content = b"Single browser upload"
+    ai_service_stub.estimate_payload = {"summary": "Single file estimate"}
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        await conn.execute(
+            """
+            INSERT INTO presale_requests (
+                id, owner_id, title, customer_name, description, status, desired_outputs
+            )
+            VALUES ($1, $2, 'CRM estimate', 'Acme Corp', 'Estimate CRM work', 'draft', '[]'::jsonb)
+            """,
+            presale_id,
+            user_id,
+        )
+    finally:
+        await conn.close()
+
+    response = await client.post(
+        f"/presales/{presale_id}/estimate",
+        headers={"Authorization": f"Bearer {token}"},
+        data={"answers": json.dumps(["Business goal", "Requirements attached"])},
+        files={"files": ("case.md", file_content, "text/markdown")},
+    )
+
+    assert response.status_code == 200
+    assert ai_service_stub.estimate_requests == [
+        {
+            "answers": ["Business goal", "Requirements attached"],
+            "files": [
+                {
+                    "filename": "case.md",
+                    "content_type": "text/markdown",
+                    "content": "Single browser upload",
+                },
+            ],
+        },
+    ]
+
+
+@pytest.mark.anyio
 async def test_replace_rates_replaces_existing_rates(
     client: AsyncClient,
     asyncpg_url: str,

@@ -28,6 +28,16 @@ from shared.responses import success_response
 router = APIRouter()
 
 
+def normalize_upload_files(files: UploadFile | list[UploadFile] | None) -> list[UploadFile]:
+    if files is None:
+        return []
+
+    if isinstance(files, list):
+        return files
+
+    return [files]
+
+
 def parse_answers(raw: str) -> list[str]:
     try:
         value = json.loads(raw)
@@ -191,13 +201,13 @@ async def generate_estimate(
         str,
         Form(description="JSON-массив строк с ответами по порядку вопросов из ai_service"),
     ],
-    files: Annotated[list[UploadFile], File()] = [],
+    files: Annotated[UploadFile | list[UploadFile] | None, File()] = None,
 ):
     obj = await PresaleService(session).generate_estimate(
         presale_id=presale_id,
         user=user,
         answers=parse_answers(answers),
-        files=files,
+        files=normalize_upload_files(files),
     )
     return success_response(AnalysisRead.model_validate(obj).model_dump(mode="json"))
 
