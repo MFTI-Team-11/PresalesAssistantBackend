@@ -74,10 +74,37 @@ def test_default_team_and_rates_when_rates_are_missing() -> None:
     assert "Backend Developer middle 1 FTE" in team_options[0]["roles"]
 
 
+def test_filter_estimate_result_keeps_only_selected_outputs() -> None:
+    result = {
+        "analysis": {
+            "functional_requirements": [{"code": "FR-001"}],
+            "nonfunctional_requirements": [{"code": "NFR-001"}],
+            "tasks": [{"name": "API"}],
+            "architecture_options": [{"name": "Monolith"}],
+            "sizing": {"summary": "Small"},
+            "team_options": [{"name": "Team"}],
+            "risks": [{"risk": "Scope"}],
+        },
+        "effort_budget": {"total_hours": 100},
+        "support_budget": {"monthly_cost": 10},
+        "warranty_budget": {"annual_cost": 20},
+        "monthly_expenses": [{"month": 1}],
+    }
+
+    filtered = AiService().filter_estimate_result(result, ["architecture", "risks"])
+
+    assert filtered["analysis"]["architecture_options"] == [{"name": "Monolith"}]
+    assert filtered["analysis"]["risks"] == [{"risk": "Scope"}]
+    assert filtered["analysis"]["tasks"] == []
+    assert filtered["analysis"]["sizing"] == {}
+    assert filtered["support_budget"] == {}
+
+
 @pytest.mark.anyio
 async def test_presale_estimate_fills_team_and_rates_without_uploaded_rates() -> None:
     result = await AiService(client=FakeEstimateClient()).presale_estimate(
         answers=[],
+        desired_outputs=[],
         attachment_groups=[],
     )
 

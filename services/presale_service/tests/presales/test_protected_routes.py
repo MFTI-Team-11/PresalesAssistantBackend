@@ -67,5 +67,5 @@ def _presale_payload() -> dict[str, Any]:
         "title": "CRM implementation estimate",
         "customer_name": "Acme Corp",
         "description": "Estimate a CRM implementation project.",
-        "desired_outputs": ["timeline", "team", "budget"],
+        "desired_outputs": ["effort", "architecture", "support"],
     }

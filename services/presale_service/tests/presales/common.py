@@ -141,6 +141,7 @@ def ai_service_stub() -> Generator[AiServiceStub, None, None]:
     @stub.post("/presale/estimate")
     async def generate_presale_estimate(
         answers: str = Form(),
+        desired_outputs: str = Form(default="[]"),
         files: list[UploadFile] = File(default=[]),
     ) -> dict:
         request_files = []
@@ -156,6 +157,7 @@ def ai_service_stub() -> Generator[AiServiceStub, None, None]:
         service_stub.estimate_requests.append(
             {
                 "answers": json.loads(answers),
+                "desired_outputs": json.loads(desired_outputs),
                 "files": request_files,
             }
         )

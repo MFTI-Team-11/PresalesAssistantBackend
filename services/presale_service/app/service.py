@@ -151,7 +151,11 @@ class PresaleService:
                     }
                 )
 
-        payload = await self.ai.generate_presale_estimate(answers, ai_files)
+        payload = await self.ai.generate_presale_estimate(
+            answers=answers,
+            files=ai_files,
+            desired_outputs=presale.desired_outputs,
+        )
         if presale.analysis:
             analysis = presale.analysis
             analysis.payload = payload

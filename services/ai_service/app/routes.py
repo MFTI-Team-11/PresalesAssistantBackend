@@ -110,11 +110,17 @@ async def generate_presale_estimate(
         UploadFile | list[UploadFile] | None,
         File(description="Файлы, фото, документы и изображения с требованиями или ставками"),
     ] = None,
+    desired_outputs: Annotated[
+        str,
+        Form(description="JSON-массив выбранных пользователем результатов пресейла"),
+    ] = "[]",
 ) -> dict:
     parsed_answers = parse_answers(answers)
+    parsed_desired_outputs = parse_string_list(desired_outputs)
     attachment_groups, source_documents = await upload_ai_files(normalize_upload_files(files))
     estimate = await ai_service.presale_estimate(
         answers=parsed_answers,
+        desired_outputs=parsed_desired_outputs,
         attachment_groups=attachment_groups,
     )
     response = PresaleEstimateResponse(**estimate, source_documents=source_documents)
@@ -135,3 +141,21 @@ def parse_answers(raw: str) -> list[str]:
             detail="answers must be a JSON array",
         )
     return ["" if item is None else str(item) for item in value]
+
+
+def parse_string_list(raw: str) -> list[str]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="desired_outputs must be a valid JSON array",
+        ) from exc
+
+    if not isinstance(value, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="desired_outputs must be a JSON array",
+        )
+
+    return [str(item).strip() for item in value if str(item).strip()]

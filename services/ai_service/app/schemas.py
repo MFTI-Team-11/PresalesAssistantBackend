@@ -45,9 +45,9 @@ class AnalysisResponse(BaseModel):
 
 class PresaleEstimateResponse(BaseModel):
     analysis: AnalysisResponse
-    extracted_rates: list[dict]
-    effort_budget: dict
-    support_budget: dict
-    warranty_budget: dict
-    monthly_expenses: list[dict]
+    extracted_rates: list[dict] = Field(default_factory=list)
+    effort_budget: dict = Field(default_factory=dict)
+    support_budget: dict = Field(default_factory=dict)
+    warranty_budget: dict = Field(default_factory=dict)
+    monthly_expenses: list[dict] = Field(default_factory=list)
     source_documents: list[dict]

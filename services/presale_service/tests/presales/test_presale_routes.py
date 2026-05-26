@@ -26,7 +26,7 @@ async def test_create_presale_happy_case(
             "title": "CRM implementation estimate",
             "customer_name": "Acme Corp",
             "description": "Estimate a CRM implementation project.",
-            "desired_outputs": ["timeline", "team", "budget"],
+            "desired_outputs": ["effort", "architecture", "support"],
         },
     )
 
@@ -48,7 +48,7 @@ async def test_create_presale_happy_case(
         "customer_name": "Acme Corp",
         "description": "Estimate a CRM implementation project.",
         "status": "draft",
-        "desired_outputs": ["timeline", "team", "budget"],
+        "desired_outputs": ["effort", "architecture", "support"],
     }
 
     conn = await asyncpg.connect(asyncpg_url)
@@ -70,7 +70,7 @@ async def test_create_presale_happy_case(
     assert row["customer_name"] == "Acme Corp"
     assert row["description"] == "Estimate a CRM implementation project."
     assert row["status"] == "draft"
-    assert json.loads(row["desired_outputs"]) == ["timeline", "team", "budget"]
+    assert json.loads(row["desired_outputs"]) == ["effort", "architecture", "support"]
 
 
 @pytest.mark.anyio
@@ -92,15 +92,15 @@ async def test_list_presales_returns_two_items_for_current_user(
             VALUES
                 (
                     $1, $2, 'First estimate', 'Acme Corp', 'First description',
-                    'draft', '["timeline"]'::jsonb
+                    'draft', '["effort"]'::jsonb
                 ),
                 (
                     $3, $2, 'Second estimate', 'Beta LLC', 'Second description',
-                    'draft', '["budget"]'::jsonb
+                    'draft', '["support"]'::jsonb
                 ),
                 (
                     $4, $5, 'Other estimate', 'Other Corp', 'Other description',
-                    'draft', '["team"]'::jsonb
+                    'draft', '["architecture"]'::jsonb
                 )
             """,
             uuid4(),
@@ -139,7 +139,7 @@ async def test_list_presales_returns_two_items_for_current_user(
             "customer_name": "Acme Corp",
             "description": "First description",
             "status": "draft",
-            "desired_outputs": ["timeline"],
+            "desired_outputs": ["effort"],
         },
         {
             "owner_id": str(user_id),
@@ -147,7 +147,7 @@ async def test_list_presales_returns_two_items_for_current_user(
             "customer_name": "Beta LLC",
             "description": "Second description",
             "status": "draft",
-            "desired_outputs": ["budget"],
+            "desired_outputs": ["support"],
         },
     ]
 
@@ -226,7 +226,7 @@ async def test_get_presale_returns_history_for_current_user(
             )
             VALUES (
                 $1, $2, 'CRM implementation estimate', 'Acme Corp', 'Estimate CRM work',
-                'analysis_ready', '["timeline", "budget"]'::jsonb
+                'analysis_ready', '["effort", "support"]'::jsonb
             )
             """,
             presale_id,
@@ -303,7 +303,7 @@ async def test_get_presale_returns_history_for_current_user(
         "customer_name": "Acme Corp",
         "description": "Estimate CRM work",
         "status": "analysis_ready",
-        "desired_outputs": ["timeline", "budget"],
+        "desired_outputs": ["effort", "support"],
     }
     assert payload["questions"] == [
         {
@@ -865,7 +865,7 @@ async def test_generate_estimate_saves_answers_files_and_analysis(
             )
             VALUES (
                 $1, $2, 'CRM estimate', 'Acme Corp', 'Estimate CRM work',
-                'draft', '["timeline", "budget"]'::jsonb
+                'draft', '["effort", "support"]'::jsonb
             )
             """,
             presale_id,
@@ -898,6 +898,7 @@ async def test_generate_estimate_saves_answers_files_and_analysis(
     assert ai_service_stub.estimate_requests == [
         {
             "answers": ["Improve sales workflow", "Existing requirements attached"],
+            "desired_outputs": ["effort", "support"],
             "files": [
                 {
                     "filename": "requirements.txt",
@@ -921,7 +922,7 @@ async def test_generate_estimate_saves_answers_files_and_analysis(
     presale_row = dict(presale_rows[0])
     assert presale_row.pop("created_at")
     assert presale_row.pop("updated_at")
-    assert json.loads(presale_row.pop("desired_outputs")) == ["timeline", "budget"]
+    assert json.loads(presale_row.pop("desired_outputs")) == ["effort", "support"]
     assert presale_row == {
         "id": presale_id,
         "owner_id": user_id,
@@ -1027,6 +1028,7 @@ async def test_generate_estimate_accepts_single_file_mapping(
     assert ai_service_stub.estimate_requests == [
         {
             "answers": ["Business goal", "Requirements attached"],
+            "desired_outputs": [],
             "files": [
                 {
                     "filename": "case.md",
