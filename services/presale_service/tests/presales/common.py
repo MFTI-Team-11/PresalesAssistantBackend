@@ -9,8 +9,9 @@ from uuid import UUID
 import jwt
 import pytest
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.waiting_utils import wait_for_logs
 
@@ -22,7 +23,15 @@ from shared.responses import success_response
 class AiServiceStub:
     url: str
     chat_message: str = "The estimate can be refined with more requirements."
+    generated_questions: list[str] = field(default_factory=lambda: ["What is the project scope?"])
+    generate_questions_requests: list[dict] = field(default_factory=list)
+    estimate_payload: dict = field(default_factory=lambda: {"summary": "Generated estimate"})
+    estimate_requests: list[dict] = field(default_factory=list)
     stream_chunks: list[str] = field(default_factory=lambda: ["The estimate ", "can be streamed."])
+
+
+class GenerateQuestionsRequest(BaseModel):
+    text: str
 
 
 @pytest.fixture()
@@ -110,6 +119,12 @@ def ai_service_stub() -> Generator[AiServiceStub, None, None]:
     async def get_default_questions() -> dict:
         return success_response({"questions": questions})
 
+    @stub.post("/questions")
+    async def generate_questions(data: GenerateQuestionsRequest) -> dict:
+        service_stub.generate_questions_requests.append(data.model_dump())
+
+        return success_response({"questions": service_stub.generated_questions})
+
     @stub.post("/chat")
     async def chat() -> dict:
         return success_response({"message": service_stub.chat_message})
@@ -122,6 +137,30 @@ def ai_service_stub() -> Generator[AiServiceStub, None, None]:
             yield f"data: {json.dumps({'done': True})}\n\n"
 
         return StreamingResponse(events(), media_type="text/event-stream")
+
+    @stub.post("/presale/estimate")
+    async def generate_presale_estimate(
+        answers: str = Form(),
+        files: list[UploadFile] = File(default=[]),
+    ) -> dict:
+        request_files = []
+        for file in files:
+            request_files.append(
+                {
+                    "filename": file.filename,
+                    "content_type": file.content_type,
+                    "content": (await file.read()).decode("utf-8"),
+                }
+            )
+
+        service_stub.estimate_requests.append(
+            {
+                "answers": json.loads(answers),
+                "files": request_files,
+            }
+        )
+
+        return success_response(service_stub.estimate_payload)
 
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
