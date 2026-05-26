@@ -4,6 +4,7 @@ from typing import Any
 
 import asyncpg
 import pytest
+from common import ai_service_stub, ai_service_url, minio_service_url
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -12,6 +13,9 @@ from testcontainers.postgres import PostgresContainer
 
 from app.api import routes
 from app.db.session import Base
+
+
+__all__ = ["ai_service_stub", "ai_service_url", "minio_service_url"]
 
 
 @pytest.fixture()

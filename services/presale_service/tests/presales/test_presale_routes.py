@@ -1,86 +1,14 @@
 import json
-import socket
-import threading
-import time
-from collections.abc import Generator
+from io import BytesIO
 from uuid import UUID, uuid4
 
 import asyncpg
-import jwt
 import pytest
-import uvicorn
-from fastapi import FastAPI
+from common import AiServiceStub, create_access_token
 from httpx import AsyncClient
+from minio import Minio
 
 from app.core.config import settings
-from shared.responses import success_response
-
-
-def create_access_token(user_id: UUID, email: str = "customer@example.com") -> str:
-    return jwt.encode(
-        {"sub": str(user_id), "email": email},
-        settings.jwt_secret_key,
-        algorithm=settings.jwt_algorithm,
-    )
-
-
-@pytest.fixture()
-def ai_service_url() -> Generator[str, None, None]:
-    questions = [
-        {
-            "id": "business_goal",
-            "text": "What business goal should the project achieve?",
-            "category": "business",
-            "required": True,
-            "answer_type": "text",
-            "allow_file": False,
-            "file_required": False,
-            "file_hint": None,
-            "placeholder": "Describe the expected business outcome",
-        },
-        {
-            "id": "requirements_file",
-            "text": "Upload existing requirements if available.",
-            "category": "documents",
-            "required": False,
-            "answer_type": "file",
-            "allow_file": True,
-            "file_required": False,
-            "file_hint": "PDF, DOCX, XLSX, TXT",
-            "placeholder": None,
-        },
-    ]
-
-    stub = FastAPI()
-
-    @stub.get("/questions/default")
-    async def get_default_questions() -> dict:
-        return success_response({"questions": questions})
-
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-
-    config = uvicorn.Config(
-        stub,
-        host="127.0.0.1",
-        port=port,
-        log_level="warning",
-        lifespan="off",
-    )
-    server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-
-    for _ in range(100):
-        if server.started:
-            break
-        time.sleep(0.01)
-
-    yield f"http://127.0.0.1:{port}"
-
-    server.should_exit = True
-    thread.join(timeout=5)
 
 
 @pytest.mark.anyio
@@ -230,16 +158,11 @@ async def test_get_default_questions_returns_questions(
     ai_service_url: str,
 ) -> None:
     token = create_access_token(uuid4())
-    previous_ai_service_url = settings.ai_service_url
-    settings.ai_service_url = ai_service_url
 
-    try:
-        response = await client.get(
-            "/presales/questions/default",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    finally:
-        settings.ai_service_url = previous_ai_service_url
+    response = await client.get(
+        "/presales/questions/default",
+        headers={"Authorization": f"Bearer {token}"},
+    )
 
     assert response.status_code == 200
     assert response.json() == {
@@ -401,7 +324,7 @@ async def test_get_presale_returns_history_for_current_user(
             "storage_bucket": "presale-files",
             "storage_object_key": "users/user/presales/scope.pdf",
             "size_bytes": 256,
-        }
+        },
     ]
     assert payload["analysis"] == {
         "id": str(analysis_id),
@@ -422,5 +345,312 @@ async def test_get_presale_returns_history_for_current_user(
             "id": str(second_chat_message_id),
             "role": "assistant",
             "content": "The estimate is based on the provided requirements.",
-        }
+        },
     ]
+
+
+@pytest.mark.anyio
+async def test_list_chat_messages_returns_multiple_for_presale(
+    client: AsyncClient,
+    asyncpg_url: str,
+) -> None:
+    user_id = uuid4()
+    other_user_id = uuid4()
+    presale_id = uuid4()
+    other_presale_id = uuid4()
+    first_message_id = uuid4()
+    second_message_id = uuid4()
+    token = create_access_token(user_id)
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        await conn.execute(
+            """
+            INSERT INTO presale_requests (
+                id, owner_id, title, customer_name, description, status, desired_outputs
+            )
+            VALUES
+                ($1, $2, 'CRM estimate', 'Acme Corp', 'Estimate CRM work', 'draft', '[]'::jsonb),
+                ($3, $4, 'Other estimate', 'Other Corp', 'Other work', 'draft', '[]'::jsonb)
+            """,
+            presale_id,
+            user_id,
+            other_presale_id,
+            other_user_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO presale_chat_messages (id, presale_id, role, content, created_at)
+            VALUES
+                ($1, $2, 'user', 'What is included?', '2026-01-01 10:00:00+00'),
+                ($3, $2, 'assistant', 'Timeline and budget are included.', '2026-01-01 10:01:00+00'),
+                ($4, $5, 'user', 'Other user message', '2026-01-01 10:02:00+00')
+            """,
+            first_message_id,
+            presale_id,
+            second_message_id,
+            uuid4(),
+            other_presale_id,
+        )
+    finally:
+        await conn.close()
+
+    response = await client.get(
+        f"/presales/{presale_id}/chat/messages",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+
+    body = response.json()
+    payload = body["payload"]
+
+    assert body["success"] is True
+    assert len(payload) == 2
+
+    for chat_message in payload:
+        assert chat_message.pop("created_at")
+
+    assert payload == [
+        {
+            "id": str(first_message_id),
+            "role": "user",
+            "content": "What is included?",
+        },
+        {
+            "id": str(second_message_id),
+            "role": "assistant",
+            "content": "Timeline and budget are included.",
+        },
+    ]
+
+
+@pytest.mark.anyio
+async def test_create_chat_message_appends_user_and_assistant_messages(
+    client: AsyncClient,
+    asyncpg_url: str,
+    ai_service_url: str,
+) -> None:
+    user_id = uuid4()
+    presale_id = uuid4()
+    existing_message_id = uuid4()
+    token = create_access_token(user_id)
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        await conn.execute(
+            """
+            INSERT INTO presale_requests (
+                id, owner_id, title, customer_name, description, status, desired_outputs
+            )
+            VALUES ($1, $2, 'CRM estimate', 'Acme Corp', 'Estimate CRM work', 'draft', '[]'::jsonb)
+            """,
+            presale_id,
+            user_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO presale_chat_messages (id, presale_id, role, content)
+            VALUES ($1, $2, 'assistant', 'Seeded assistant message')
+            """,
+            existing_message_id,
+            presale_id,
+        )
+    finally:
+        await conn.close()
+
+    response = await client.post(
+        f"/presales/{presale_id}/chat/messages",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "Please refine the estimate."},
+    )
+
+    assert response.status_code == 201
+
+    body = response.json()
+    payload = body["payload"]
+
+    assert body["success"] is True
+    assert len(payload) == 2
+
+    for chat_message in payload:
+        assert chat_message.pop("id")
+        assert chat_message.pop("created_at")
+
+    assert payload == [
+        {
+            "role": "user",
+            "content": "Please refine the estimate.",
+        },
+        {
+            "role": "assistant",
+            "content": "The estimate can be refined with more requirements.",
+        },
+    ]
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT role, content
+            FROM presale_chat_messages
+            WHERE presale_id = $1
+            ORDER BY created_at, role DESC
+            """,
+            presale_id,
+        )
+    finally:
+        await conn.close()
+
+    assert [(row["role"], row["content"]) for row in rows] == [
+        ("assistant", "Seeded assistant message"),
+        ("user", "Please refine the estimate."),
+        ("assistant", "The estimate can be refined with more requirements."),
+    ]
+
+
+@pytest.mark.anyio
+async def test_stream_chat_message_streams_and_persists_messages(
+    client: AsyncClient,
+    asyncpg_url: str,
+    ai_service_stub: AiServiceStub,
+) -> None:
+    user_id = uuid4()
+    presale_id = uuid4()
+    existing_message_id = uuid4()
+    token = create_access_token(user_id)
+    ai_service_stub.stream_chunks = ["Refined ", "streamed ", "answer."]
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        await conn.execute(
+            """
+            INSERT INTO presale_requests (
+                id, owner_id, title, customer_name, description, status, desired_outputs
+            )
+            VALUES ($1, $2, 'CRM estimate', 'Acme Corp', 'Estimate CRM work', 'draft', '[]'::jsonb)
+            """,
+            presale_id,
+            user_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO presale_chat_messages (id, presale_id, role, content, created_at)
+            VALUES ($1, $2, 'assistant', 'Seeded stream message', '2026-01-01 10:00:00+00')
+            """,
+            existing_message_id,
+            presale_id,
+        )
+    finally:
+        await conn.close()
+
+    async with client.stream(
+        "POST",
+        f"/presales/{presale_id}/chat/messages/stream",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "Please stream the refined estimate."},
+    ) as response:
+        lines = [line async for line in response.aiter_lines() if line]
+
+    assert response.status_code == 200
+    assert lines == [
+        'data: {"delta": "Refined "}',
+        'data: {"delta": "streamed "}',
+        'data: {"delta": "answer."}',
+        'data: {"done": true}',
+    ]
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT role, content
+            FROM presale_chat_messages
+            WHERE presale_id = $1
+            ORDER BY created_at, role DESC
+            """,
+            presale_id,
+        )
+    finally:
+        await conn.close()
+
+    assert [(row["role"], row["content"]) for row in rows] == [
+        ("assistant", "Seeded stream message"),
+        ("user", "Please stream the refined estimate."),
+        ("assistant", "Refined streamed answer."),
+    ]
+
+
+@pytest.mark.anyio
+async def test_download_file_redirects_to_presigned_url(
+    client: AsyncClient,
+    asyncpg_url: str,
+    minio_service_url: str,
+) -> None:
+    user_id = uuid4()
+    presale_id = uuid4()
+    file_id = uuid4()
+    token = create_access_token(user_id)
+    object_key = "users/user/presales/requirements.txt"
+    file_content = b"Requirement details"
+    minio_client = Minio(
+        endpoint=minio_service_url.removeprefix("http://"),
+        access_key=settings.minio_access_key,
+        secret_key=settings.minio_secret_key,
+        secure=False,
+    )
+
+    minio_client.make_bucket(settings.minio_bucket)
+    minio_client.put_object(
+        bucket_name=settings.minio_bucket,
+        object_name=object_key,
+        data=BytesIO(file_content),
+        length=len(file_content),
+        content_type="text/plain",
+    )
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        await conn.execute(
+            """
+            INSERT INTO presale_requests (
+                id, owner_id, title, customer_name, description, status, desired_outputs
+            )
+            VALUES ($1, $2, 'CRM estimate', 'Acme Corp', 'Estimate CRM work', 'draft', '[]'::jsonb)
+            """,
+            presale_id,
+            user_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO presale_documents (
+                id, presale_id, filename, content_type, text_content,
+                storage_bucket, storage_object_key, size_bytes
+            )
+            VALUES (
+                $1, $2, 'requirements.txt', 'text/plain', 'Requirement details',
+                'presale-files', $3, 128
+            )
+            """,
+            file_id,
+            presale_id,
+            object_key,
+        )
+    finally:
+        await conn.close()
+
+    response = await client.get(
+        f"/presales/{presale_id}/files/{file_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 307
+    assert response.headers["location"].startswith(
+        f"{minio_service_url}/presale-files/users/user/presales/requirements.txt?"
+    )
+
+    async with AsyncClient() as external_client:
+        file_response = await external_client.get(response.headers["location"])
+
+    assert file_response.status_code == 200
+    assert file_response.content == file_content
