@@ -15,8 +15,6 @@ DEFAULT_PREANALYSIS_QUESTIONS = [
     "Какая бизнес-цель проекта и какие KPI должны быть достигнуты?",
     "Кто основные пользователи системы и какие пользовательские сценарии нужно поддержать?",
     "Какие входные документы, таблицы и вложенные файлы будут загружаться для анализа?",
-    "Какие результаты пресейла нужно получить: трудозатраты, архитектура, "
-    "сайзинг, риски, ФТ, НФТ, поддержка, гарантия?",
     "Какие внешние системы и интеграции требуются, какие протоколы и форматы обмена используются?",
     "Какие ограничения есть по размещению: on-premise, контур компании, "
     "запрет передачи данных наружу?",
@@ -49,11 +47,6 @@ DEFAULT_PREANALYSIS_QUESTION_META = [
         "allow_file": True,
         "file_hint": "Можно приложить ТЗ, письмо заказчика или документ с требованиями",
         "placeholder": "Если файла нет, опишите входные документы текстом",
-    },
-    {
-        "id": "desired_outputs",
-        "category": "result",
-        "placeholder": "Например: архитектура, бюджет, сайзинг, риски, ФТ/НФТ",
     },
     {
         "id": "integrations",
@@ -166,6 +159,18 @@ PRESALE_ESTIMATE_SYSTEM_PROMPT = f"""
 4. желаемые результаты пресейла;
 5. ограничения по срокам, поддержке, гарантии, on-premise, безопасности.
 
+Учитывай выбранные пользователем результаты пресейла из поля "Выбранные результаты".
+Если выбран только набор разделов, подробно заполняй именно соответствующие поля JSON:
+- "effort": tasks, team_options, effort_budget, monthly_expenses;
+- "functional_requirements": functional_requirements;
+- "architecture": architecture_options;
+- "nonfunctional_requirements": nonfunctional_requirements;
+- "risks": risks;
+- "sizing": sizing;
+- "support": support_budget, warranty_budget.
+Невыбранные разделы можно вернуть пустыми массивами или объектами, но JSON должен оставаться
+валидным по схеме. Если выбранных результатов нет, сформируй полный пресейл-результат.
+
 Ставки специалистов необязательны. Если пользователь не передал ставки, не задавай
 дополнительный вопрос и не останавливай оценку: самостоятельно предложи состав
 команды, роли, грейды и загрузку специалистов без простоя, используй рыночные
@@ -274,9 +279,11 @@ class AiService:
     async def presale_estimate(
         self,
         answers: list[str],
+        desired_outputs: list[str] | None,
         attachment_groups: list[list[str]],
     ) -> dict:
         input_text = self.format_ordered_answers(answers)
+        desired_outputs_text = self.format_desired_outputs(desired_outputs or [])
         content = await self.client.chat_json(
             [
                 {"role": "system", "content": PRESALE_ESTIMATE_SYSTEM_PROMPT},
@@ -285,6 +292,7 @@ class AiService:
                     "content": (
                         "Проанализируй входные данные и приложенные файлы. "
                         "Верни итог пресейла, ставки, длительность и схему поддержки.\n\n"
+                        f"Выбранные результаты пресейла: {desired_outputs_text}\n\n"
                         f"Текст пользователя:\n{input_text or 'Пользователь не ввел текст'}"
                     ),
                 },
@@ -308,7 +316,7 @@ class AiService:
         normalized_rates = self.normalize_rates(extracted_rates)
         effort_budget = self.effort_budget(analysis["tasks"], normalized_rates)
         warranty_budget = self.warranty_budget(effort_budget["total_cost"])
-        return {
+        result = {
             "analysis": analysis,
             "extracted_rates": extracted_rates,
             "effort_budget": effort_budget,
@@ -320,6 +328,41 @@ class AiService:
                 project_months,
             ),
         }
+        return self.filter_estimate_result(result, desired_outputs or [])
+
+    def format_desired_outputs(self, desired_outputs: list[str]) -> str:
+        if not desired_outputs:
+            return "не указаны, сформируй полный пресейл-результат"
+
+        return ", ".join(desired_outputs)
+
+    def filter_estimate_result(self, result: dict, desired_outputs: list[str]) -> dict:
+        if not desired_outputs:
+            return result
+
+        selected = {item.strip().lower() for item in desired_outputs}
+        analysis = result["analysis"]
+
+        if "functional_requirements" not in selected:
+            analysis["functional_requirements"] = []
+        if "architecture" not in selected:
+            analysis["architecture_options"] = []
+        if "nonfunctional_requirements" not in selected:
+            analysis["nonfunctional_requirements"] = []
+        if "risks" not in selected:
+            analysis["risks"] = []
+        if "sizing" not in selected:
+            analysis["sizing"] = {}
+        if "effort" not in selected:
+            analysis["tasks"] = []
+            analysis["team_options"] = []
+            result["effort_budget"] = {}
+            result["monthly_expenses"] = []
+        if "support" not in selected:
+            result["support_budget"] = {}
+            result["warranty_budget"] = {}
+
+        return result
 
     async def presale_chat(self, messages: list[dict]) -> str:
         content = await self.client.chat_json(

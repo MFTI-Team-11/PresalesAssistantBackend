@@ -42,7 +42,12 @@ class AiServiceClient:
                     if event.get("done"):
                         break
 
-    async def generate_presale_estimate(self, answers: list[str], files: list[dict]) -> dict:
+    async def generate_presale_estimate(
+        self,
+        answers: list[str],
+        files: list[dict],
+        desired_outputs: list[str],
+    ) -> dict:
         multipart_files = []
         for item in files:
             multipart_files.append(
@@ -58,7 +63,10 @@ class AiServiceClient:
         async with httpx.AsyncClient(base_url=settings.ai_service_url, timeout=180) as client:
             response = await client.post(
                 "/presale/estimate",
-                data={"answers": json.dumps(answers, ensure_ascii=False)},
+                data={
+                    "answers": json.dumps(answers, ensure_ascii=False),
+                    "desired_outputs": json.dumps(desired_outputs, ensure_ascii=False),
+                },
                 files=multipart_files or None,
             )
             try:

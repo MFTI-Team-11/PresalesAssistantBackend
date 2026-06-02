@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
@@ -6,6 +7,9 @@ import httpx
 from fastapi import HTTPException, status
 
 from app.core.config import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIClient:
@@ -137,6 +141,7 @@ class OpenAIClient:
         output_path = Path(str(settings.openai_stream_output_path))
         output_path.parent.mkdir(parents=True, exist_ok=True)
         text_parts: list[str] = []
+        response_lines: list[str] = []
 
         with output_path.open("w", encoding="utf-8") as output_file:
             async with httpx.AsyncClient(timeout=settings.openai_timeout_seconds) as client:
@@ -154,6 +159,9 @@ class OpenAIClient:
                         )
 
                     async for line in response.aiter_lines():
+                        if line:
+                            response_lines.append(line)
+
                         delta = self._stream_delta(line)
                         if delta:
                             text_parts.append(delta)
@@ -162,6 +170,11 @@ class OpenAIClient:
 
         text = "".join(text_parts)
         if not text:
+            logger.error(
+                "OpenAI returned unexpected streaming response: output_path=%s lines=%s",
+                output_path,
+                response_lines,
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="OpenAI returned an unexpected streaming response",
@@ -187,11 +200,13 @@ class OpenAIClient:
 
     def _message(self, message: dict) -> dict:
         role = "developer" if message.get("role") == "system" else message.get("role", "user")
+        content_type = "output_text" if role == "assistant" else "input_text"
+
         return {
             "role": role,
             "content": [
                 {
-                    "type": "input_text",
+                    "type": content_type,
                     "text": str(message.get("content", "")),
                 }
             ],
